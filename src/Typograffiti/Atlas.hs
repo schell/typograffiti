@@ -1,0 +1,347 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards  #-}
+{-# LANGUAGE TypeApplications #-}
+-- |
+-- Module:     Typograffiti.Atlas
+-- Copyright:  (c) 2018 Schell Scivally
+-- License:    MIT
+-- Maintainer: Schell Scivally <schell@takt.com>
+--
+-- This module provides easy freetype2 font rendering without having to mess with
+-- opengl.
+--
+module Typograffiti.Atlas where
+
+import           Control.Monad
+import           Control.Monad.Except                              (MonadError (..))
+import           Control.Monad.IO.Class
+import           Data.IntMap                                       (IntMap)
+import qualified Data.IntMap                                       as IM
+import           Data.Map                                          (Map)
+import qualified Data.Map                                          as M
+import           Data.Vector.Unboxed                               (Vector)
+import qualified Data.Vector.Unboxed                               as UV
+import           Foreign.Marshal.Utils                             (with)
+import           Graphics.GL.Core32
+import           Graphics.GL.Types
+import           Graphics.Rendering.FreeType.Internal.Bitmap       as BM
+import           Graphics.Rendering.FreeType.Internal.GlyphMetrics as GM
+import           Linear
+
+import           Typograffiti.GL
+import           Typograffiti.Glyph
+import           Typograffiti.Utils
+
+
+data TypograffitiError =
+    TypograffitiErrorNoGlyphMetricsForChar Char
+  -- ^ The are no glyph metrics for this character. This probably means
+  -- the character has not been loaded into the atlas.
+  | TypograffitiErrorFreetype String String
+  -- ^ There was a problem while interacting with the freetype2 library.
+  deriving (Show, Eq)
+
+
+data SpatialTransform = SpatialTransformTranslate (V2 Float)
+                      | SpatialTransformScale (V2 Float)
+                      | SpatialTransformRotate Float
+
+
+data FontTransform = FontTransformAlpha Float
+                   | FontTransformMultiply (V4 Float)
+                   | FontTransformReplaceRed (V4 Float)
+                   | FontTransformSpatial SpatialTransform
+
+
+data FontRendering = FontRendering
+  { fontRenderingDraw    :: [FontTransform] -> IO ()
+  , fontRenderingRelease :: IO ()
+  , fontRenderingSize    :: V2 Int
+  }
+
+
+type WordMap = Map String (V2 Float, FontRendering)
+
+
+--------------------------------------------------------------------------------
+-- Atlas
+--------------------------------------------------------------------------------
+
+
+data Atlas = Atlas { atlasTexture     :: GLuint
+                   , atlasTextureSize :: V2 Int
+                   , atlasLibrary     :: FT_Library
+                   , atlasFontFace    :: FT_Face
+                   , atlasMetrics     :: IntMap GlyphMetrics
+                   , atlasGlyphSize   :: GlyphSize
+                   , atlasFilePath    :: FilePath
+                   }
+
+
+emptyAtlas :: FT_Library -> FT_Face -> GLuint -> Atlas
+emptyAtlas lib fce t = Atlas t 0 lib fce mempty (PixelSize 0 0) ""
+
+
+data AtlasMeasure = AM { amWH      :: V2 Int
+                       , amXY      :: V2 Int
+                       , rowHeight :: Int
+                       , amMap     :: IntMap (V2 Int)
+                       } deriving (Show, Eq)
+
+
+emptyAM :: AtlasMeasure
+emptyAM = AM 0 (V2 1 1) 0 mempty
+
+
+spacing :: Int
+spacing = 1
+
+
+measure :: FT_Face -> Int -> AtlasMeasure -> Char -> FreeTypeIO AtlasMeasure
+measure fce maxw am@AM{..} char
+  | Just _ <- IM.lookup (fromEnum char) amMap = return am
+  | otherwise = do
+    let V2 x y = amXY
+        V2 w h = amWH
+    -- Load the char, replacing the glyph according to
+    -- https://www.freetype.org/freetype2/docs/tutorial/step1.html
+    loadChar fce (fromIntegral $ fromEnum char) ft_LOAD_RENDER
+    -- Get the glyph slot
+    slot <- liftIO $ peek $ glyph fce
+    -- Get the bitmap
+    bmp   <- liftIO $ peek $ bitmap slot
+    let bw = fromIntegral $ BM.width bmp
+        bh = fromIntegral $ rows bmp
+        gotoNextRow = (x + bw + spacing) >= maxw
+        rh = if gotoNextRow then 0 else max bh rowHeight
+        nx = if gotoNextRow then 0 else x + bw + spacing
+        nw = max w (x + bw + spacing)
+        nh = max h (y + rh + spacing)
+        ny = if gotoNextRow then nh else y
+        am1 = AM { amWH = V2 nw nh
+                 , amXY = V2 nx ny
+                 , rowHeight = rh
+                 , amMap = IM.insert (fromEnum char) amXY amMap
+                 }
+    return am1
+
+
+texturize :: IntMap (V2 Int) -> Atlas -> Char -> FreeTypeIO Atlas
+texturize xymap atlas@Atlas{..} char
+  | Just pos@(V2 x y) <- IM.lookup (fromEnum char) xymap = do
+    -- Load the char
+    loadChar atlasFontFace (fromIntegral $ fromEnum char) ft_LOAD_RENDER
+    -- Get the slot and bitmap
+    slot  <- liftIO $ peek $ glyph atlasFontFace
+    bmp   <- liftIO $ peek $ bitmap slot
+    -- Update our texture by adding the bitmap
+    glTexSubImage2D GL_TEXTURE_2D 0
+                    (fromIntegral x) (fromIntegral y)
+                    (fromIntegral $ BM.width bmp) (fromIntegral $ rows bmp)
+                    GL_RED GL_UNSIGNED_BYTE
+                    (castPtr $ buffer bmp)
+    -- Get the glyph metrics
+    ftms  <- liftIO $ peek $ metrics slot
+    -- Add the metrics to the atlas
+    let vecwh = fromIntegral <$> V2 (BM.width bmp) (rows bmp)
+        canon = floor @Double @Int . (* 0.5) . (* 0.015625) . fromIntegral
+        vecsz = canon <$> V2 (GM.width ftms) (GM.height ftms)
+        vecxb = canon <$> V2 (horiBearingX ftms) (horiBearingY ftms)
+        vecyb = canon <$> V2 (vertBearingX ftms) (vertBearingY ftms)
+        vecad = canon <$> V2 (horiAdvance ftms) (vertAdvance ftms)
+        mtrcs = GlyphMetrics { glyphTexBB = (pos, pos + vecwh)
+                             , glyphTexSize = vecwh
+                             , glyphSize = vecsz
+                             , glyphHoriBearing = vecxb
+                             , glyphVertBearing = vecyb
+                             , glyphAdvance = vecad
+                             }
+    return atlas{ atlasMetrics = IM.insert (fromEnum char) mtrcs atlasMetrics }
+
+  | otherwise = do
+    liftIO $ putStrLn "could not find xy"
+    return atlas
+
+-- | Allocate a new 'Atlas'.
+-- When creating a new 'Atlas' you must pass all the characters that you
+-- might need during the life of the 'Atlas'. Character texturization only
+-- happens here.
+allocAtlas
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     )
+  => FilePath
+  -- ^ 'FilePath' of the 'Font' to use for this 'Atlas'.
+  -> GlyphSize
+  -- ^ Size of glyphs in this 'Atlas'
+  -> String
+  -- ^ The characters to include in this 'Atlas'.
+  -> m Atlas
+allocAtlas fontFilePath gs str = do
+  e <- liftIO $ runFreeType $ do
+    fce <- newFace fontFilePath
+    case gs of
+      PixelSize w h -> setPixelSizes fce (2*w) (2*h)
+      CharSize w h dpix dpiy -> setCharSize fce (floor $ 26.6 * 2 * w)
+                                                (floor $ 26.6 * 2 * h)
+                                                dpix dpiy
+
+    AM{..} <- foldM (measure fce 512) emptyAM str
+
+    let V2 w h = amWH
+        xymap  = amMap
+
+    t <- liftIO $ do
+      t <- allocAndActivateTex GL_TEXTURE0
+      glPixelStorei GL_UNPACK_ALIGNMENT 1
+      withCString (replicate (w * h) $ toEnum 0) $
+        glTexImage2D GL_TEXTURE_2D 0 GL_RED (fromIntegral w) (fromIntegral h)
+                     0 GL_RED GL_UNSIGNED_BYTE . castPtr
+      return t
+
+    lib   <- getLibrary
+    atlas <- foldM (texturize xymap) (emptyAtlas lib fce t) str
+
+    glGenerateMipmap GL_TEXTURE_2D
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
+    glBindTexture GL_TEXTURE_2D 0
+    glPixelStorei GL_UNPACK_ALIGNMENT 4
+    return
+      atlas{ atlasTextureSize = V2 w h
+           , atlasGlyphSize = gs
+           , atlasFilePath = fontFilePath
+           }
+
+  either
+    (throwError . TypograffitiErrorFreetype "cannot alloc atlas")
+    (return . fst)
+    e
+
+
+-- | Releases all resources associated with the given 'Atlas'.
+freeAtlas :: MonadIO m => Atlas -> m ()
+freeAtlas a = liftIO $ do
+  _ <- ft_Done_FreeType (atlasLibrary a)
+  -- _ <- unloadMissingWords a ""
+  with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
+
+
+-- | Load a string of words into the 'Atlas'.
+--loadWords
+--  :: MonadIO m
+--  => _program
+--  -- ^ The V2(backend, needed) to render font glyphs.
+--  -> Atlas
+--  -- ^ The atlas to load the words into.
+--  -> String
+--  -- ^ The string of words to load, with each word separated by spaces.
+--  -> m Atlas
+--loadWords b atlas str = do
+--  wm <- liftIO $ foldM loadWord (atlasWordMap atlas) $ words str
+--  return atlas{atlasWordMap=wm}
+--  where loadWord wm word
+--          | M.member word wm = return wm
+--          | otherwise = do
+--              let pic = do freetypePicture atlas word
+--                           _pictureSize2 fst
+--              (sz,r) <- _compilePictureT b pic
+--              return $ M.insert word (sz,r) wm
+
+
+-- | Unload any words not contained in the source string.
+--unloadMissingWords
+--  :: MonadIO m
+--  => Atlas
+--  -- ^ The 'Atlas' to unload words from.
+--  -> String
+--  -- ^ The source string.
+--  -> m Atlas
+--unloadMissingWords atlas str = do
+--  let wm = atlasWordMap atlas
+--      ws = M.fromList $ zip (words str) [(0::Int)..]
+--      missing = M.difference wm ws
+--      retain  = M.difference wm missing
+--      dealoc  = liftIO . fontRenderingRelease . snd
+--                  <$> missing
+--  sequence_ dealoc
+--  return atlas{atlasWordMap=retain}
+
+
+-- | Construct the geometry needed to render the given character.
+makeCharQuad
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     )
+  => Atlas
+  -- ^ The atlas that contains the metrics for the given character.
+  -> Bool
+  -- ^ Whether or not to use kerning.
+  -> Int
+  -- ^ The current "pen position".
+  -> Maybe FT_UInt
+  -- ^ The freetype index of the previous character, if available.
+  -> Char
+  -- ^ The character to generate geometry for.
+  -> m (Vector (V2 Float, V2 Float), Int, Maybe FT_UInt)
+  -- ^ Returns the generated geometry (position in 2-space and UV parameters),
+  -- the next pen position and the freetype index of the given character, if
+  -- available.
+makeCharQuad Atlas{..} useKerning penx mLast char = do
+  let ichar = fromEnum char
+  eNdx <- withFreeType (Just atlasLibrary) $ getCharIndex atlasFontFace ichar
+  let mndx = either (const Nothing) Just eNdx
+  px <- case (,,) <$> mndx <*> mLast <*> Just useKerning of
+    Just (ndx,lndx,True) -> do
+      e <- withFreeType (Just atlasLibrary) $
+        getKerning atlasFontFace lndx ndx ft_KERNING_DEFAULT
+      return $ either (const penx) ((+penx) . floor . (/(64::Double)) . fromIntegral . fst) e
+    _  -> return $ fromIntegral penx
+  case IM.lookup ichar atlasMetrics of
+    Nothing -> throwError $ TypograffitiErrorNoGlyphMetricsForChar char -- return (penx, mndx)
+    Just GlyphMetrics{..} -> do
+      let V2 dx dy = fromIntegral <$> glyphHoriBearing
+          x = fromIntegral px + dx
+          y = -dy
+          V2 w h = fromIntegral <$> glyphSize
+          V2 aszW aszH = fromIntegral <$> atlasTextureSize
+          V2 texL texT = fromIntegral <$> fst glyphTexBB
+          V2 texR texB = fromIntegral <$> snd glyphTexBB
+
+          tl = (V2 x      y   , V2 (texL/aszW) (texT/aszH))
+          tr = (V2 (x+w)  y   , V2 (texR/aszW) (texT/aszH))
+          br = (V2 (x+w) (y+h), V2 (texR/aszW) (texB/aszH))
+          bl = (V2 x     (y+h), V2 (texL/aszW) (texB/aszH))
+      let vs = UV.fromList [ tl, tr, br
+                           , tl, br, bl
+                           ]
+      let V2 ax _ = glyphAdvance
+      return (vs, px + ax, mndx)
+
+
+-- | A string containing all standard ASCII characters.
+-- This is often passed as the 'String' parameter in 'allocAtlas'.
+asciiChars :: String
+asciiChars = map toEnum [32..126]
+
+
+-- | Generate the geometry of the given string.
+stringTris
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     )
+  => Atlas
+  -- ^ The font atlas.
+  -> Bool
+  -- ^ Whether or not to use kerning.
+  -> String
+  -- ^ The string.
+  -> m (Vector (V2 Float, V2 Float))
+stringTris atlas useKerning str = do
+  (vs, _, _) <- foldM gen (mempty, 0, Nothing) str
+  return $ UV.concat vs
+  where gen (vs, penx, mndx) c = do
+          (newVs, newPenx, newMndx) <- makeCharQuad atlas useKerning penx mndx c
+          return (vs ++ [newVs], newPenx, newMndx)
