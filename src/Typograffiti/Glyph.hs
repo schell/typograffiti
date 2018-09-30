@@ -23,24 +23,24 @@ data GlyphSize = GlyphSizeByChar CharSize
                deriving (Show, Eq, Ord)
 
 
-pixelWidth :: GlyphSize -> Int
+pixelWidth :: GlyphSize -> Float
 pixelWidth (GlyphSizeInPixels w h)
-  | w == 0 = h
-  | otherwise = w
+  | w == 0 = fromIntegral h
+  | otherwise = fromIntegral w
 pixelWidth (GlyphSizeByChar (CharSize w h xdpi ydpi)) =
   let dpi = if xdpi == 0 then ydpi else xdpi
       sz  = if w == 0 then h else w
-  in round $ fromIntegral sz * fromIntegral dpi / 72
+  in fromIntegral sz * fromIntegral dpi / 72
 
 
-pixelHeight :: GlyphSize -> Int
+pixelHeight :: GlyphSize -> Float
 pixelHeight (GlyphSizeInPixels w h)
-  | h == 0 = w
-  | otherwise = h
+  | h == 0 = fromIntegral w
+  | otherwise = fromIntegral h
 pixelHeight (GlyphSizeByChar (CharSize w h xdpi ydpi)) =
   let dpi = if ydpi == 0 then xdpi else ydpi
       sz  = if h == 0 then w else h
-  in round $ fromIntegral sz * fromIntegral dpi / 72
+  in fromIntegral sz * fromIntegral dpi / 72
 
 
 -- | https://www.freetype.org/freetype2/docs/tutorial/step2.html

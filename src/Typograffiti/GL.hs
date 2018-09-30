@@ -4,8 +4,7 @@
 module Typograffiti.GL where
 
 import           Control.Exception      (assert)
-import           Control.Monad          (forM_, when)
-import           Control.Monad.Except   (MonadError (..))
+import           Control.Monad          (forM_, when, replicateM)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.ByteString        (ByteString)
 import qualified Data.ByteString.Char8  as B8
@@ -25,43 +24,56 @@ import           Linear
 import           Linear.V               (Finite, Size, dim, toV)
 
 
-
-allocAndActivateTex :: GLenum -> IO GLuint
+allocAndActivateTex :: MonadIO m => GLenum -> m GLuint
 allocAndActivateTex u = do
-    [t] <- allocaArray 1 $ \ptr -> do
-        glGenTextures 1 ptr
-        peekArray 1 ptr
-    glActiveTexture u
-    glBindTexture GL_TEXTURE_2D t
-    return t
+  [t] <- liftIO $ allocaArray 1 $ \ptr -> do
+    glGenTextures 1 ptr
+    peekArray 1 ptr
+  glActiveTexture u
+  glBindTexture GL_TEXTURE_2D t
+  return t
 
 
-clearErrors :: String -> IO ()
+clearErrors :: MonadIO m => String -> m ()
 clearErrors str = do
-    err' <- glGetError
-    when (err' /= 0) $ do
-      putStrLn $ unwords [str, show err']
-      assert False $ return ()
+  err' <- glGetError
+  when (err' /= 0) $ do
+    liftIO $ putStrLn $ unwords [str, show err']
+    assert False $ return ()
+
+
+newBoundVAO
+  :: MonadIO m => m GLuint
+newBoundVAO = do
+  [vao] <- liftIO $ allocaArray 1 $ \ptr -> do
+      glGenVertexArrays 1 ptr
+      peekArray 1 ptr
+  glBindVertexArray vao
+  return vao
+
 
 
 withVAO :: MonadIO m => (GLuint -> IO b) -> m b
 withVAO f = liftIO $ do
-  [vao] <- allocaArray 1 $ \ptr -> do
-      glGenVertexArrays 1 ptr
-      peekArray 1 ptr
-  glBindVertexArray vao
+  vao <- newBoundVAO
   r <- f vao
   clearErrors "withVAO"
   glBindVertexArray 0
   return r
 
 
-withBuffers :: Int -> ([GLuint] -> IO b) -> IO b
-withBuffers n f = do
-  bufs <- allocaArray n $ \ptr -> do
-      glGenBuffers (fromIntegral n) ptr
-      peekArray (fromIntegral n) ptr
-  f bufs
+newBuffer
+  :: MonadIO m
+  => m GLuint
+newBuffer = liftIO $ do
+  [b] <- allocaArray 1 $ \ptr -> do
+    glGenBuffers 1 ptr
+    peekArray 1 ptr
+  return b
+
+
+withBuffers :: MonadIO m => Int -> ([GLuint] -> m b) -> m b
+withBuffers n = (replicateM n newBuffer >>=)
 
 
 -- | Buffer some geometry into an attribute.
@@ -72,6 +84,7 @@ bufferGeometry
      , Storable (f Float)
      , Finite f
      , KnownNat (Size f)
+     , MonadIO m
      )
   => GLuint
   -- ^ The attribute location.
@@ -79,7 +92,7 @@ bufferGeometry
   -- ^ The buffer identifier.
   -> UV.Vector (f Float)
   -- ^ The geometry to buffer.
-  -> IO ()
+  -> m ()
 bufferGeometry loc buf as
   | UV.null as = return ()
   | otherwise = do
@@ -87,7 +100,7 @@ bufferGeometry loc buf as
         asize = UV.length as * sizeOf v
         n     = fromIntegral $ dim $ toV v
     glBindBuffer GL_ARRAY_BUFFER buf
-    SV.unsafeWith (convertVec as) $ \ptr ->
+    liftIO $ SV.unsafeWith (convertVec as) $ \ptr ->
       glBufferData GL_ARRAY_BUFFER (fromIntegral asize) (castPtr ptr) GL_STATIC_DRAW
     glEnableVertexAttribArray loc
     glVertexAttribPointer loc n GL_FLOAT GL_FALSE 0 nullPtr
@@ -131,17 +144,17 @@ drawVAO program vao mode num = liftIO $ do
 
 
 compileOGLShader
-  :: (MonadIO m, MonadError String m)
+  :: MonadIO m
   => ByteString
      -- ^ The shader source
   -> GLenum
   -- ^ The shader type (vertex, frag, etc)
-  -> m GLuint
+  -> m (Either String GLuint)
   -- ^ Either an error message or the generated shader handle.
 compileOGLShader src shType = do
   shader <- liftIO $ glCreateShader shType
   if shader == 0
-    then throwError "Could not create shader"
+    then return $ Left "Could not create shader"
     else do
       success <- liftIO $ do
         withCString (B8.unpack src) $ \ptr ->
@@ -166,17 +179,15 @@ compileOGLShader src shType = do
                              , B8.unpack src
                              , map (toEnum . fromEnum) infoLog
                              ]
-          throwError err
-        else return shader
+          return $ Left err
+        else return $ Right shader
 
 
 compileOGLProgram
-  :: ( MonadIO m
-     , MonadError String m
-     )
+  :: MonadIO m
   => [(String, Integer)]
   -> [GLuint]
-  -> m GLuint
+  -> m (Either String GLuint)
 compileOGLProgram attribs shaders = do
   (program, success) <- liftIO $ do
      program <- glCreateProgram
@@ -194,20 +205,21 @@ compileOGLProgram attribs shaders = do
      return (program, success)
 
   if success == GL_FALSE
-  then do
-    err <- liftIO $ with (0 :: GLint) $ \ptr -> do
-      glGetProgramiv program GL_INFO_LOG_LENGTH ptr
-      logsize <- peek ptr
-      infoLog <- allocaArray (fromIntegral logsize) $ \logptr -> do
-        glGetProgramInfoLog program logsize nullPtr logptr
-        peekArray (fromIntegral logsize) logptr
-      return $ unlines [ "Could not link program"
-                        , map (toEnum . fromEnum) infoLog
-                        ]
-    throwError err
+  then liftIO $ with (0 :: GLint) $ \ptr -> do
+    glGetProgramiv program GL_INFO_LOG_LENGTH ptr
+    logsize <- peek ptr
+    infoLog <- allocaArray (fromIntegral logsize) $ \logptr -> do
+      glGetProgramInfoLog program logsize nullPtr logptr
+      peekArray (fromIntegral logsize) logptr
+    return
+      $ Left
+      $ unlines
+          [ "Could not link program"
+          , map (toEnum . fromEnum) infoLog
+          ]
   else do
     liftIO $ forM_ shaders glDeleteShader
-    return program
+    return $ Right program
 
 
 --------------------------------------------------------------------------------
@@ -233,25 +245,28 @@ class UniformValue a where
     -> m ()
 
 
-clearUniformUpdateError :: Show a => GLuint -> GLint -> a -> IO ()
+clearUniformUpdateError :: (MonadIO m, Show a) => GLuint -> GLint -> a -> m ()
 clearUniformUpdateError prog loc val = glGetError >>= \case
   0 -> return ()
   e -> do
     let buf = replicate 256 ' '
-    ident <- withCString buf
+    ident <- liftIO $ withCString buf
       $ \strptr -> with 0
       $ \szptr  -> do
         glGetActiveUniformName prog (fromIntegral loc) 256 szptr strptr
         sz <- peek szptr
         peekCAStringLen (strptr, fromIntegral sz)
-    putStrLn $ unwords [ "Could not update uniform"
-                        , ident
-                        , "with value"
-                        , show val
-                        , ", encountered error (" ++ show e ++ ")"
-                        , show (GL_INVALID_OPERATION :: Integer, "invalid operation" :: String)
-                        , show (GL_INVALID_VALUE :: Integer, "invalid value" :: String)
-                        ]
+    liftIO
+      $ putStrLn
+      $ unwords
+          [ "Could not update uniform"
+          , ident
+          , "with value"
+          , show val
+          , ", encountered error (" ++ show e ++ ")"
+          , show (GL_INVALID_OPERATION :: Integer, "invalid operation" :: String)
+          , show (GL_INVALID_VALUE :: Integer, "invalid value" :: String)
+          ]
     assert False $ return ()
 
 
@@ -337,3 +352,16 @@ orthoProjection
 orthoProjection (V2 ww wh) =
   let (hw,hh) = (fromIntegral ww, fromIntegral wh)
   in ortho 0 hw hh 0 0 1
+
+
+boundingBox :: (Unbox a, Real a, Fractional a) => UV.Vector (V2 a) -> (V2 a, V2 a)
+boundingBox vs
+  | UV.null vs = (0,0)
+  | otherwise = UV.foldl' f (br,tl) vs
+  where mn a = min a . realToFrac
+        mx a = max a . realToFrac
+        f (a, b) c = (mn <$> a <*> c, mx <$> b <*> c)
+        inf = 1/0
+        ninf = (-1)/0
+        tl = V2 ninf ninf
+        br = V2 inf inf

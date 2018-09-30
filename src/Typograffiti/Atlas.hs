@@ -7,7 +7,7 @@
 -- License:    MIT
 -- Maintainer: Schell Scivally <schell@takt.com>
 --
--- This module provides easy freetype2 font rendering without having to mess with
+-- This module provides a font-character atlas to use in font rendering with
 -- opengl.
 --
 module Typograffiti.Atlas where
@@ -15,11 +15,8 @@ module Typograffiti.Atlas where
 import           Control.Monad
 import           Control.Monad.Except                              (MonadError (..))
 import           Control.Monad.IO.Class
-import           Data.Bifunctor                                    (bimap)
 import           Data.IntMap                                       (IntMap)
 import qualified Data.IntMap                                       as IM
-import           Data.Map                                          (Map)
-import qualified Data.Map                                          as M
 import           Data.Vector.Unboxed                               (Vector)
 import qualified Data.Vector.Unboxed                               as UV
 import           Foreign.Marshal.Utils                             (with)
@@ -34,34 +31,16 @@ import           Typograffiti.Glyph
 import           Typograffiti.Utils
 
 
+
 data TypograffitiError =
     TypograffitiErrorNoGlyphMetricsForChar Char
   -- ^ The are no glyph metrics for this character. This probably means
   -- the character has not been loaded into the atlas.
   | TypograffitiErrorFreetype String String
   -- ^ There was a problem while interacting with the freetype2 library.
+  | TypograffitiErrorGL String
+  -- ^ There was a problem while interacting with OpenGL.
   deriving (Show, Eq)
-
-
-data SpatialTransform = SpatialTransformTranslate (V2 Float)
-                      | SpatialTransformScale (V2 Float)
-                      | SpatialTransformRotate Float
-
-
-data FontTransform = FontTransformAlpha Float
-                   | FontTransformMultiply (V4 Float)
-                   | FontTransformReplaceRed (V4 Float)
-                   | FontTransformSpatial SpatialTransform
-
-
-data FontRendering = FontRendering
-  { fontRenderingDraw    :: [FontTransform] -> IO ()
-  , fontRenderingRelease :: IO ()
-  , fontRenderingSize    :: V2 Int
-  }
-
-
-type WordMap = Map String (V2 Float, FontRendering)
 
 
 --------------------------------------------------------------------------------
@@ -234,47 +213,6 @@ freeAtlas a = liftIO $ do
   _ <- ft_Done_FreeType (atlasLibrary a)
   -- _ <- unloadMissingWords a ""
   with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
-
-
--- | Load a string of words into the 'Atlas'.
---loadWords
---  :: MonadIO m
---  => _program
---  -- ^ The V2(backend, needed) to render font glyphs.
---  -> Atlas
---  -- ^ The atlas to load the words into.
---  -> String
---  -- ^ The string of words to load, with each word separated by spaces.
---  -> m Atlas
---loadWords b atlas str = do
---  wm <- liftIO $ foldM loadWord (atlasWordMap atlas) $ words str
---  return atlas{atlasWordMap=wm}
---  where loadWord wm word
---          | M.member word wm = return wm
---          | otherwise = do
---              let pic = do freetypePicture atlas word
---                           _pictureSize2 fst
---              (sz,r) <- _compilePictureT b pic
---              return $ M.insert word (sz,r) wm
-
-
--- | Unload any words not contained in the source string.
---unloadMissingWords
---  :: MonadIO m
---  => Atlas
---  -- ^ The 'Atlas' to unload words from.
---  -> String
---  -- ^ The source string.
---  -> m Atlas
---unloadMissingWords atlas str = do
---  let wm = atlasWordMap atlas
---      ws = M.fromList $ zip (words str) [(0::Int)..]
---      missing = M.difference wm ws
---      retain  = M.difference wm missing
---      dealoc  = liftIO . fontRenderingRelease . snd
---                  <$> missing
---  sequence_ dealoc
---  return atlas{atlasWordMap=retain}
 
 
 -- | Construct the geometry needed to render the given character.

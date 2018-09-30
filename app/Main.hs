@@ -1,15 +1,19 @@
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications    #-}
 module Main where
 
 import           Control.Monad          (unless)
-import           Control.Monad.Except   (runExceptT, withExceptT)
+import           Control.Monad.Except   (MonadError, liftEither,
+                                         runExceptT)
 import           Control.Monad.IO.Class (MonadIO (..))
+import           Data.Bifunctor         (first)
 import           Data.ByteString        (ByteString)
 import qualified Data.ByteString.Char8  as B8
 import           Data.Function          (fix)
 import qualified Data.Vector.Unboxed    as UV
+import           Foreign.Marshal.Array
 import           Graphics.GL
 import           SDL
 import           System.FilePath        ((</>))
@@ -46,10 +50,78 @@ fragmentShader = B8.pack $ unlines
   ]
 
 
--- TODO: Word caching.
--- Somehow make it so it isn't bonded to one kind of
--- shader. It would be nice if users could write their own
--- shaders for this. At the same time, they shouldn't have to.
+-- TODO: Include a default Cache.
+-- That allows translation, scale, rotation and color.
+
+
+instance Layout (V2 Float) where
+  translate = (+)
+
+
+makeAllocateWord
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     )
+  => Window
+  -> m (Atlas -> String -> m (AllocatedRendering (V2 Float) m))
+makeAllocateWord window = do
+  -- Compile our shader program
+  let position = 0
+      uv       = 1
+      liftGL   = liftEither . first TypograffitiErrorGL
+  vert <- liftGL =<< compileOGLShader vertexShader GL_VERTEX_SHADER
+  frag <- liftGL =<< compileOGLShader fragmentShader GL_FRAGMENT_SHADER
+  prog <- liftGL =<< compileOGLProgram
+    [ ("position", fromIntegral position)
+    , ("uv", fromIntegral uv)
+    ]
+    [vert, frag]
+  glUseProgram prog
+  -- Get our uniform locations
+  projection <- getUniformLocation prog "projection"
+  modelview  <- getUniformLocation prog "modelview"
+  tex        <- getUniformLocation prog "tex"
+  -- Return a function that will generate new words
+  return $ \atlas string -> do
+    liftIO $ putStrLn $ unwords ["Allocating", string]
+    vao   <- newBoundVAO
+    pbuf  <- newBuffer
+    uvbuf <- newBuffer
+    -- Generate our string geometry
+    geom <- stringTris atlas True string
+    let (ps, uvs) = UV.unzip geom
+    -- Buffer the geometry into our attributes
+    bufferGeometry position pbuf  ps
+    bufferGeometry uv       uvbuf uvs
+    glBindVertexArray 0
+
+    let draw (V2 x y) = do
+          liftIO $ pPrint (string, V2 x y)
+          glUseProgram prog
+          wsz <- get (windowSize window)
+          let pj :: M44 Float = orthoProjection wsz
+              mv :: M44 Float = mat4Translate (V3 x y 0)
+          updateUniform prog projection pj
+          updateUniform prog modelview  mv
+          updateUniform prog tex (0 :: Int)
+          glBindVertexArray vao
+          withBoundTextures [atlasTexture atlas] $ do
+            drawVAO
+              prog
+              vao
+              GL_TRIANGLES
+              (fromIntegral $ UV.length ps)
+            glBindVertexArray 0
+        release = liftIO $ do
+          withArray [pbuf, uvbuf] $ glDeleteBuffers 2
+          withArray [vao] $ glDeleteVertexArrays 1
+        (tl, br) = boundingBox ps
+        size = br - tl
+    return AllocatedRendering
+      { arDraw    = draw
+      , arRelease = release
+      , arSize    = round <$> size
+      }
 
 
 main :: IO ()
@@ -68,57 +140,26 @@ main = do
   _ <- glCreateContext w
   let ttfName = "assets" </> "Lora-Regular.ttf"
 
-  (either fail return =<<) . runExceptT $ do
+  e <- runExceptT $ do
     -- Get the atlas
-    atlas <- withExceptT show
-      $ allocAtlas
-          ttfName
-          (GlyphSizeInPixels 16 16)
-          asciiChars
-    -- Compile our shader program
-    let position = 0
-        uv       = 1
-    vert <- compileOGLShader vertexShader GL_VERTEX_SHADER
-    frag <- compileOGLShader fragmentShader GL_FRAGMENT_SHADER
-    prog <- compileOGLProgram
-      [ ("position", fromIntegral position)
-      , ("uv", fromIntegral uv)
-      ]
-      [vert, frag]
-    glUseProgram prog
-    -- Get our uniform locations
-    projection <- getUniformLocation prog "projection"
-    modelview  <- getUniformLocation prog "modelview"
-    tex        <- getUniformLocation prog "tex"
-    -- Generate our string geometry
-    geom <- withExceptT show
-      $ stringTris atlas True "Typograffiti from your head to your feetee."
-    let (ps, uvs) = UV.unzip geom
-    -- Buffer the geometry into our attributes
-    textVao <- withVAO $ \vao -> do
-      withBuffers 2 $ \[pbuf, uvbuf] -> do
-        bufferGeometry position pbuf  ps
-        bufferGeometry uv       uvbuf uvs
-        return vao
-    atlasVao <- withVAO $ \vao -> do
-      withBuffers 2 $ \[pbuf, uvbuf] -> do
-        let V2 w h = fromIntegral
-              <$> atlasTextureSize atlas
-        bufferGeometry position pbuf $ UV.fromList
-          [ V2 0 0, V2 w 0, V2 w h
-          , V2 0 0, V2 w h, V2 0 h
-          ]
-        bufferGeometry uv uvbuf $ UV.fromList
-          [ V2 0 0, V2 1 0, V2 1 1
-          , V2 0 0, V2 1 1, V2 0 1
-          ]
-        return vao
+    atlas <- allocAtlas
+      ttfName
+      (GlyphSizeInPixels 16 16)
+      asciiChars
 
-    -- Set our model view transform
-    let mv :: M44 Float
-        mv = mat4Translate (V3 0 16 0)
-        mv2 :: M44 Float
-        mv2 = mv !*! mat4Translate (V3 0 16 0)
+    allocWord <- makeAllocateWord w
+
+    (draw, _, cache) <-
+      loadText
+        allocWord
+        atlas
+        mempty
+        $ unlines
+            [ "Hey there!"
+            , "This is a test of the emergency word system."
+            , "Quit at any time."
+            ]
+
     -- Forever loop, drawing stuff
     fix $ \loop -> do
 
@@ -128,28 +169,13 @@ main = do
       glClearColor 0 0 0 1
       glClear GL_COLOR_BUFFER_BIT
 
-      dsz@(V2 dw dh) <- glGetDrawableSize w
+      (V2 dw dh) <- glGetDrawableSize w
       glViewport 0 0 (fromIntegral dw) (fromIntegral dh)
 
-      wsz <- get (windowSize w)
-      let pj :: M44 Float = orthoProjection wsz
-
-      withBoundTextures [atlasTexture atlas] $ do
-        updateUniform prog projection pj
-        updateUniform prog modelview mv
-        updateUniform prog tex (0 :: Int)
-        drawVAO
-          prog
-          textVao
-          GL_TRIANGLES
-          (fromIntegral $ UV.length ps)
-
-        updateUniform prog projection pj
-        updateUniform prog modelview mv2
-        drawVAO
-          prog
-          atlasVao
-          GL_TRIANGLES
-          6
+      draw $ V2 10 32
       glSwapWindow w
-      unless (any (== QuitEvent) events) loop
+
+      unless (QuitEvent `elem` events) loop
+    _ <- unloadMissingWords cache ""
+    return ()
+  either (fail . show) return e
