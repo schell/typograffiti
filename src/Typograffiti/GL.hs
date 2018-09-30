@@ -210,16 +210,6 @@ compileOGLProgram attribs shaders = do
     return program
 
 
-orthoProjection
-  :: Integral a
-  => V2 a
-  -- ^ The window width and height
-  -> M44 Float
-orthoProjection (V2 ww wh) =
-  let (hw,hh) = (fromIntegral ww, fromIntegral wh)
-  in ortho 0 hw hh 0 0 1
-
-
 --------------------------------------------------------------------------------
 -- Uniform marshaling functions
 --------------------------------------------------------------------------------
@@ -326,8 +316,10 @@ instance UniformValue (Int,Int) where
 mat4Translate :: Num a => V3 a -> M44 a
 mat4Translate = mkTransformationMat identity
 
+
 mat4Rotate :: (Num a, Epsilon a, Floating a) => a -> V3 a -> M44 a
 mat4Rotate phi v = mkTransformation (axisAngle v phi) (V3 0 0 0)
+
 
 mat4Scale :: Num a => V3 a -> M44 a
 mat4Scale (V3 x y z) =
@@ -335,3 +327,13 @@ mat4Scale (V3 x y z) =
        (V4 0 y 0 0)
        (V4 0 0 z 0)
        (V4 0 0 0 1)
+
+
+orthoProjection
+  :: Integral a
+  => V2 a
+  -- ^ The window width and height
+  -> M44 Float
+orthoProjection (V2 ww wh) =
+  let (hw,hh) = (fromIntegral ww, fromIntegral wh)
+  in ortho 0 hw hh 0 0 1

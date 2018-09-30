@@ -3,15 +3,18 @@
 {-# LANGUAGE TypeApplications    #-}
 module Main where
 
-import           Control.Monad          (forever)
+import           Control.Monad          (unless)
 import           Control.Monad.Except   (runExceptT, withExceptT)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.ByteString        (ByteString)
 import qualified Data.ByteString.Char8  as B8
+import           Data.Function          (fix)
 import qualified Data.Vector.Unboxed    as UV
 import           Graphics.GL
 import           SDL
 import           System.FilePath        ((</>))
+import           Text.Show.Pretty       (pPrint)
+
 import           Typograffiti
 import           Typograffiti.GL
 
@@ -26,7 +29,7 @@ vertexShader = B8.pack $ unlines
   , "out vec2 fuv;"
   , "void main () {"
   , "  fuv = uv;"
-  , "  gl_Position = projection * modelview * vec4(position, 0.0, 0.1);"
+  , "  gl_Position = projection * modelview * vec4(position.xy, 0.0, 1.0);"
   , "}"
   ]
 
@@ -43,6 +46,12 @@ fragmentShader = B8.pack $ unlines
   ]
 
 
+-- TODO: Word caching.
+-- Somehow make it so it isn't bonded to one kind of
+-- shader. It would be nice if users could write their own
+-- shaders for this. At the same time, they shouldn't have to.
+
+
 main :: IO ()
 main = do
   SDL.initializeAll
@@ -51,17 +60,21 @@ main = do
         { glProfile = Core Debug 3 3 }
       wcfg = defaultWindow
         { windowInitialSize = V2 640 480
-        , windowOpenGL = Just openGL
+        , windowOpenGL      = Just openGL
+        , windowResizable   = True
         }
 
   w <- createWindow "Typograffiti" wcfg
   _ <- glCreateContext w
-  let ttfName = "assets" </> "Neuton-Regular.ttf"
+  let ttfName = "assets" </> "Lora-Regular.ttf"
 
   (either fail return =<<) . runExceptT $ do
     -- Get the atlas
     atlas <- withExceptT show
-      $ allocAtlas ttfName (PixelSize 16 16) asciiChars
+      $ allocAtlas
+          ttfName
+          (GlyphSizeInPixels 16 16)
+          asciiChars
     -- Compile our shader program
     let position = 0
         uv       = 1
@@ -79,7 +92,7 @@ main = do
     tex        <- getUniformLocation prog "tex"
     -- Generate our string geometry
     geom <- withExceptT show
-      $ stringTris atlas True "Hi there"
+      $ stringTris atlas True "Typograffiti from your head to your feetee."
     let (ps, uvs) = UV.unzip geom
     -- Buffer the geometry into our attributes
     textVao <- withVAO $ \vao -> do
@@ -103,14 +116,24 @@ main = do
 
     -- Set our model view transform
     let mv :: M44 Float
-        mv = mat4Translate (V3 10 100 0)
+        mv = mat4Translate (V3 0 16 0)
         mv2 :: M44 Float
-        mv2 = mv !*! mat4Scale (V3 0.125 0.125 1)
+        mv2 = mv !*! mat4Translate (V3 0 16 0)
     -- Forever loop, drawing stuff
-    forever $ do
-      _ <- pollEvents
-      pj :: M44 Float <-
-        orthoProjection <$> get (windowSize w)
+    fix $ \loop -> do
+
+      events <- fmap eventPayload
+        <$> pollEvents
+
+      glClearColor 0 0 0 1
+      glClear GL_COLOR_BUFFER_BIT
+
+      dsz@(V2 dw dh) <- glGetDrawableSize w
+      glViewport 0 0 (fromIntegral dw) (fromIntegral dh)
+
+      wsz <- get (windowSize w)
+      let pj :: M44 Float = orthoProjection wsz
+
       withBoundTextures [atlasTexture atlas] $ do
         updateUniform prog projection pj
         updateUniform prog modelview mv
@@ -121,6 +144,7 @@ main = do
           GL_TRIANGLES
           (fromIntegral $ UV.length ps)
 
+        updateUniform prog projection pj
         updateUniform prog modelview mv2
         drawVAO
           prog
@@ -128,3 +152,4 @@ main = do
           GL_TRIANGLES
           6
       glSwapWindow w
+      unless (any (== QuitEvent) events) loop

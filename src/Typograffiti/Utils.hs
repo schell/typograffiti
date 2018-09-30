@@ -100,7 +100,7 @@ setCharSize ff w h dpix dpiy = runIOErr "ft_Set_Char_Size" $
 
 setPixelSizes :: (MonadIO m, Integral i) => FT_Face -> i -> i -> FreeTypeT m ()
 setPixelSizes ff w h =
-  runIOErr "ft_Set_Pixel_Sizess" $ ft_Set_Pixel_Sizes ff (fromIntegral w) (fromIntegral h)
+  runIOErr "ft_Set_Pixel_Sizes" $ ft_Set_Pixel_Sizes ff (fromIntegral w) (fromIntegral h)
 
 getCharIndex :: (MonadIO m, Integral i)
              => FT_Face -> i -> FreeTypeT m FT_UInt

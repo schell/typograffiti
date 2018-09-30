@@ -15,6 +15,7 @@ module Typograffiti.Atlas where
 import           Control.Monad
 import           Control.Monad.Except                              (MonadError (..))
 import           Control.Monad.IO.Class
+import           Data.Bifunctor                                    (bimap)
 import           Data.IntMap                                       (IntMap)
 import qualified Data.IntMap                                       as IM
 import           Data.Map                                          (Map)
@@ -79,27 +80,35 @@ data Atlas = Atlas { atlasTexture     :: GLuint
 
 
 emptyAtlas :: FT_Library -> FT_Face -> GLuint -> Atlas
-emptyAtlas lib fce t = Atlas t 0 lib fce mempty (PixelSize 0 0) ""
+emptyAtlas lib fce t = Atlas t 0 lib fce mempty (GlyphSizeInPixels 0 0) ""
 
 
 data AtlasMeasure = AM { amWH      :: V2 Int
                        , amXY      :: V2 Int
                        , rowHeight :: Int
-                       , amMap     :: IntMap (V2 Int)
                        } deriving (Show, Eq)
 
 
 emptyAM :: AtlasMeasure
-emptyAM = AM 0 (V2 1 1) 0 mempty
+emptyAM = AM 0 (V2 1 1) 0
 
 
+-- | The amount of spacing between glyphs rendered into the atlas's texture.
 spacing :: Int
 spacing = 1
 
 
-measure :: FT_Face -> Int -> AtlasMeasure -> Char -> FreeTypeIO AtlasMeasure
-measure fce maxw am@AM{..} char
-  | Just _ <- IM.lookup (fromEnum char) amMap = return am
+-- | Extract the measurements of a character in the FT_Face and append it to
+-- the given AtlasMeasure.
+measure
+  :: FT_Face
+  -> Int
+  -> (IntMap AtlasMeasure, AtlasMeasure)
+  -> Char
+  -> FreeTypeIO (IntMap AtlasMeasure, AtlasMeasure)
+measure fce maxw (prev, am@AM{..}) char
+  -- Skip chars that have already been measured
+  | fromEnum char `IM.member` prev = return (prev, am)
   | otherwise = do
     let V2 x y = amXY
         V2 w h = amWH
@@ -109,7 +118,7 @@ measure fce maxw am@AM{..} char
     -- Get the glyph slot
     slot <- liftIO $ peek $ glyph fce
     -- Get the bitmap
-    bmp   <- liftIO $ peek $ bitmap slot
+    bmp <- liftIO $ peek $ bitmap slot
     let bw = fromIntegral $ BM.width bmp
         bh = fromIntegral $ rows bmp
         gotoNextRow = (x + bw + spacing) >= maxw
@@ -121,9 +130,8 @@ measure fce maxw am@AM{..} char
         am1 = AM { amWH = V2 nw nh
                  , amXY = V2 nx ny
                  , rowHeight = rh
-                 , amMap = IM.insert (fromEnum char) amXY amMap
                  }
-    return am1
+    return (IM.insert (fromEnum char) am prev, am1)
 
 
 texturize :: IntMap (V2 Int) -> Atlas -> Char -> FreeTypeIO Atlas
@@ -144,7 +152,7 @@ texturize xymap atlas@Atlas{..} char
     ftms  <- liftIO $ peek $ metrics slot
     -- Add the metrics to the atlas
     let vecwh = fromIntegral <$> V2 (BM.width bmp) (rows bmp)
-        canon = floor @Double @Int . (* 0.5) . (* 0.015625) . fromIntegral
+        canon = floor @Double @Int . (* 0.015625) . fromIntegral
         vecsz = canon <$> V2 (GM.width ftms) (GM.height ftms)
         vecxb = canon <$> V2 (horiBearingX ftms) (horiBearingY ftms)
         vecyb = canon <$> V2 (vertBearingX ftms) (vertBearingY ftms)
@@ -165,15 +173,15 @@ texturize xymap atlas@Atlas{..} char
 -- | Allocate a new 'Atlas'.
 -- When creating a new 'Atlas' you must pass all the characters that you
 -- might need during the life of the 'Atlas'. Character texturization only
--- happens here.
+-- happens once.
 allocAtlas
   :: ( MonadIO m
      , MonadError TypograffitiError m
      )
   => FilePath
-  -- ^ 'FilePath' of the 'Font' to use for this 'Atlas'.
+  -- ^ Path to the font file to use for this Atlas.
   -> GlyphSize
-  -- ^ Size of glyphs in this 'Atlas'
+  -- ^ Size of glyphs in this Atlas.
   -> String
   -- ^ The characters to include in this 'Atlas'.
   -> m Atlas
@@ -181,15 +189,14 @@ allocAtlas fontFilePath gs str = do
   e <- liftIO $ runFreeType $ do
     fce <- newFace fontFilePath
     case gs of
-      PixelSize w h -> setPixelSizes fce (2*w) (2*h)
-      CharSize w h dpix dpiy -> setCharSize fce (floor $ 26.6 * 2 * w)
-                                                (floor $ 26.6 * 2 * h)
-                                                dpix dpiy
+      GlyphSizeInPixels w h -> setPixelSizes fce w h
+      GlyphSizeByChar (CharSize w h dpix dpiy) -> setCharSize fce w h dpix dpiy
 
-    AM{..} <- foldM (measure fce 512) emptyAM str
+    (amMap, am) <- foldM (measure fce 512) (mempty, emptyAM) str
 
-    let V2 w h = amWH
-        xymap  = amMap
+    let V2 w h = amWH am
+        xymap :: IntMap (V2 Int)
+        xymap  = amXY <$> amMap
 
     t <- liftIO $ do
       t <- allocAndActivateTex GL_TEXTURE0
@@ -297,10 +304,10 @@ makeCharQuad Atlas{..} useKerning penx mLast char = do
     Just (ndx,lndx,True) -> do
       e <- withFreeType (Just atlasLibrary) $
         getKerning atlasFontFace lndx ndx ft_KERNING_DEFAULT
-      return $ either (const penx) ((+penx) . floor . (/(64::Double)) . fromIntegral . fst) e
+      return $ either (const penx) ((+penx) . floor . (* 0.015625) . fromIntegral . fst) e
     _  -> return $ fromIntegral penx
   case IM.lookup ichar atlasMetrics of
-    Nothing -> throwError $ TypograffitiErrorNoGlyphMetricsForChar char -- return (penx, mndx)
+    Nothing -> throwError $ TypograffitiErrorNoGlyphMetricsForChar char
     Just GlyphMetrics{..} -> do
       let V2 dx dy = fromIntegral <$> glyphHoriBearing
           x = fromIntegral px + dx

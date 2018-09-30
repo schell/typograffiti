@@ -45,6 +45,7 @@ executables:
     dependencies:
     - filepath
     - JuicyPixels
+    - pretty-show
     - sdl2
     - typograffiti
 

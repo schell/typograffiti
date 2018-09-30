@@ -12,6 +12,7 @@
 module Typograffiti
   ( allocAtlas
   , GlyphSize (..)
+  , CharSize (..)
   , TypograffitiError (..)
   , Atlas (..)
   , asciiChars
