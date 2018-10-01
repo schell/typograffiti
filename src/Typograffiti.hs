@@ -22,6 +22,12 @@ module Typograffiti
   , stringTris
   , loadText
   , unloadMissingWords
+  , makeDefaultAllocateWord
+  , move
+  , scale
+  , rotate
+  , color
+  , alpha
   ) where
 
 import           Typograffiti.Atlas

@@ -125,5 +125,4 @@ getKerning ff prevNdx curNdx flags = liftE "ft_Get_Kerning" $ alloca $ \ptr ->
 getAdvance :: MonadIO m => FT_GlyphSlot -> FreeTypeT m (Int,Int)
 getAdvance slot = do
   FT_Vector vx vy <- liftIO $ peek $ advance slot
-  liftIO $ print ("v", vx, vy)
   return (fromIntegral vx, fromIntegral vy)

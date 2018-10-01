@@ -122,11 +122,16 @@ texturize xymap atlas@Atlas{..} char
     slot  <- liftIO $ peek $ glyph atlasFontFace
     bmp   <- liftIO $ peek $ bitmap slot
     -- Update our texture by adding the bitmap
-    glTexSubImage2D GL_TEXTURE_2D 0
-                    (fromIntegral x) (fromIntegral y)
-                    (fromIntegral $ BM.width bmp) (fromIntegral $ rows bmp)
-                    GL_RED GL_UNSIGNED_BYTE
-                    (castPtr $ buffer bmp)
+    glTexSubImage2D
+      GL_TEXTURE_2D
+      0
+      (fromIntegral x)
+      (fromIntegral y)
+      (fromIntegral $ BM.width bmp)
+      (fromIntegral $ rows bmp)
+      GL_RED
+      GL_UNSIGNED_BYTE
+      (castPtr $ buffer bmp)
     -- Get the glyph metrics
     ftms  <- liftIO $ peek $ metrics slot
     -- Add the metrics to the atlas
