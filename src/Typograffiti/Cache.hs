@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 -- |
@@ -15,7 +16,8 @@
 module Typograffiti.Cache where
 
 import           Control.Monad          (foldM)
-import           Control.Monad.Except   (MonadError (..), liftEither)
+import           Control.Monad.Except   (MonadError (..), liftEither,
+                                         runExceptT)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Bifunctor         (first)
 import           Data.ByteString        (ByteString)
@@ -43,57 +45,60 @@ class Layout t where
 -- takes one parameter that can be used to transform the text in various ways.
 -- This type is generic and can be used to take advantage of your own font
 -- rendering shaders.
-data AllocatedRendering t m = AllocatedRendering
-  { arDraw    :: t -> m ()
+data AllocatedRendering t = AllocatedRendering
+  { arDraw    :: t -> IO ()
     -- ^ Draw the text with some transformation in some monad.
-  , arRelease :: m ()
+  , arRelease :: IO ()
     -- ^ Release the allocated draw function in some monad.
   , arSize    :: V2 Int
     -- ^ The size (in pixels) of the drawn text.
   }
 
 
-newtype WordCache t m = WordCache
-  { unWordCache :: Map String (AllocatedRendering t m) }
+newtype WordCache t = WordCache
+  { unWordCache :: Map String (AllocatedRendering t) }
   deriving (Semigroup, Monoid)
 
 
 -- | Load a string of words into the WordCache.
 loadWords
-  :: Monad m
-  => (Atlas -> String -> m (AllocatedRendering t m))
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     )
+  => (Atlas -> String -> m (AllocatedRendering t))
   -- ^ Operation used to allocate a word.
   -> Atlas
   -- ^ The character atlas that holds our letters, which is used to generate
   -- the word geometry.
-  -> WordCache t m
+  -> WordCache t
   -- ^ The atlas to load the words into.
   -> String
   -- ^ The string of words to load, with each word separated by spaces.
-  -> m (WordCache t m)
-loadWords f atlas (WordCache cache) str = do
-  wm <- foldM loadWord cache (words str)
-  return $ WordCache wm
+  -> m (WordCache t)
+loadWords f atlas (WordCache cache) str =
+  WordCache
+    <$> foldM loadWord cache (words str)
   where loadWord wm word
           | M.member word wm = return wm
-          | otherwise = do
-              w <- f atlas word
-              return $ M.insert word w wm
+          | otherwise =
+              flip (M.insert word) wm <$> f atlas word
 
 
 -- | Unload any words from the cache that are not contained in the source string.
 unloadMissingWords
-  :: Monad m
-  => WordCache t m
+  :: MonadIO m
+  => WordCache t
   -- ^ The WordCache to unload words from.
   -> String
   -- ^ The source string.
-  -> m (WordCache t m)
+  -> m (WordCache t)
 unloadMissingWords (WordCache cache) str = do
   let ws      = M.fromList $ zip (words str) (repeat ())
       missing = M.difference cache ws
       retain  = M.difference cache missing
-  sequence_ $ arRelease <$> missing
+  liftIO
+    $ sequence_
+    $ arRelease <$> missing
   return $ WordCache retain
 
 
@@ -107,21 +112,25 @@ unloadMissingWords (WordCache cache) str = do
 -- clean up operation that does nothing. It is expected that the programmer
 -- will call 'freeAtlas' manually when the 'Atlas' is no longer needed.
 loadText
-  :: forall m t. (Monad m, Layout t)
-  => (Atlas -> String -> m (AllocatedRendering t m))
+  :: forall m t.
+     ( MonadIO m
+     , MonadError TypograffitiError m
+     , Layout t
+     )
+  => (Atlas -> String -> m (AllocatedRendering t))
   -- ^ Operation used to allocate a word.
   -> Atlas
   -- ^ The character atlas that holds our letters.
-  -> WordCache t m
+  -> WordCache t
   -- ^ The WordCache to load AllocatedRenderings into.
   -> String
   -- ^ The string to render.
   -- This string may contain newlines, which will be respected.
-  -> m (t -> m (), V2 Int, WordCache t m)
+  -> m (t -> IO (), V2 Int, WordCache t)
   -- ^ Returns a function for rendering the text, the size of the text and the
   -- new WordCache with the allocated renderings of the text.
-loadText f atlas wc@(WordCache cache) str = do
-  wc1@(WordCache cache1) <- loadWords f atlas wc str
+loadText f atlas wc str = do
+  wc1@(WordCache cache) <- loadWords f atlas wc str
   let glyphw  = round $ pixelWidth $ atlasGlyphSize atlas
       spacew  :: Int
       spacew  = fromMaybe glyphw $ do
@@ -131,14 +140,14 @@ loadText f atlas wc@(WordCache cache) str = do
       glyphh = pixelHeight $ atlasGlyphSize atlas
       spaceh = round glyphh
       isWhiteSpace c = c == ' ' || c == '\n' || c == '\t'
-      renderWord :: t -> V2 Int -> String -> m ()
+      renderWord :: t -> V2 Int -> String -> IO ()
       renderWord _ _ ""       = return ()
       renderWord t (V2 _ y) ('\n':cs) = renderWord t (V2 0 (y + spaceh)) cs
       renderWord t (V2 x y) (' ':cs)  = renderWord t (V2 (x + spacew) y) cs
       renderWord t v@(V2 x y) cs               = do
         let word = takeWhile (not . isWhiteSpace) cs
             rest = drop (length word) cs
-        case M.lookup word cache1 of
+        case M.lookup word cache of
           Nothing -> renderWord t v rest
           Just ar -> do
             let t1 = translate t $ fromIntegral <$> v
@@ -148,7 +157,7 @@ loadText f atlas wc@(WordCache cache) str = do
             renderWord t pen rest
       rr t = renderWord t 0 str
       measureString :: (V2 Int, V2 Int) -> String -> (V2 Int, V2 Int)
-      measureString (V2 x y, V2 w h) ""        = (V2 x y, V2 w h)
+      measureString xywh ""                    = xywh
       measureString (V2 x y, V2 w _) (' ':cs)  =
         let nx = x + spacew in measureString (V2 nx y, V2 (max w nx) y) cs
       measureString (V2 x y, V2 w h) ('\n':cs) =
@@ -157,9 +166,9 @@ loadText f atlas wc@(WordCache cache) str = do
         let word = takeWhile (not . isWhiteSpace) cs
             rest = drop (length word) cs
             n    = case M.lookup word cache of
-                     Nothing -> (V2 x y, V2 w h)
-                     Just ar -> let V2 ww _ = arSize ar
-                                    nx      = x + ww
+                    Nothing -> (V2 x y, V2 w h)
+                    Just ar -> let V2 ww _ = arSize ar
+                                   nx      = x + ww
                                 in (V2 nx y, V2 (max w nx) y)
         in measureString n rest
       V2 szw szh = snd $ measureString (0,0) str
@@ -267,12 +276,14 @@ makeDefaultAllocateWord
      , MonadError TypograffitiError m
      , Integral i
      )
-  => m (V2 i)
+  => IO (V2 i)
   -- ^ A monadic operation that returns the current context's dimentions.
   -- This is used to set the orthographic projection for rendering text.
-  -> m (Atlas -> String -> m (AllocatedRendering [TextTransform] m))
+  -> m (Atlas
+        -> String
+        -> IO (Either TypograffitiError (AllocatedRendering [TextTransform]))
+       )
 makeDefaultAllocateWord getContextSize = do
-  -- Compile our shader program
   let position = 0
       uv       = 1
       liftGL   = liftEither . first TypograffitiErrorGL
@@ -297,40 +308,43 @@ makeDefaultAllocateWord getContextSize = do
     pbuf  <- newBuffer
     uvbuf <- newBuffer
     -- Generate our string geometry
-    geom <- stringTris atlas True string
-    let (ps, uvs) = UV.unzip geom
-    -- Buffer the geometry into our attributes
-    bufferGeometry position pbuf  ps
-    bufferGeometry uv       uvbuf uvs
-    glBindVertexArray 0
+    runExceptT (stringTris atlas True string) >>= \case
+      Left err -> return $ Left err
+      Right geom -> do
+        let (ps, uvs) = UV.unzip geom
+        -- Buffer the geometry into our attributes
+        bufferGeometry position pbuf  ps
+        bufferGeometry uv       uvbuf uvs
+        glBindVertexArray 0
 
-    let draw ts = do
-          let (mv, multVal) = transformToUniforms ts
-          glUseProgram prog
-          wsz <- getContextSize
-          let pj :: M44 Float = orthoProjection wsz
-          updateUniform prog pjU pj
-          updateUniform prog mvU  mv
-          updateUniform prog multU multVal
-          updateUniform prog texU (0 :: Int)
-          glBindVertexArray vao
-          withBoundTextures [atlasTexture atlas] $ do
-            drawVAO
-              prog
-              vao
-              GL_TRIANGLES
-              (fromIntegral $ UV.length ps)
-            glBindVertexArray 0
+        let draw :: [TextTransform] -> IO ()
+            draw ts = do
+              let (mv, multVal) = transformToUniforms ts
+              glUseProgram prog
+              wsz <- getContextSize
+              let pj :: M44 Float = orthoProjection wsz
+              updateUniform prog pjU pj
+              updateUniform prog mvU  mv
+              updateUniform prog multU multVal
+              updateUniform prog texU (0 :: Int)
+              glBindVertexArray vao
+              withBoundTextures [atlasTexture atlas] $ do
+                drawVAO
+                  prog
+                  vao
+                  GL_TRIANGLES
+                  (fromIntegral $ UV.length ps)
+                glBindVertexArray 0
 
-        release = liftIO $ do
-          withArray [pbuf, uvbuf] $ glDeleteBuffers 2
-          withArray [vao] $ glDeleteVertexArrays 1
-        (tl, br) = boundingBox ps
+            release = do
+              withArray [pbuf, uvbuf] $ glDeleteBuffers 2
+              withArray [vao] $ glDeleteVertexArrays 1
+            (tl, br) = boundingBox ps
 
-        size = br - tl
-
-    return AllocatedRendering
-      { arDraw    = draw
-      , arRelease = release
-      , arSize    = round <$> size
-      }
+            size = br - tl
+        return
+          $ Right AllocatedRendering
+              { arDraw    = draw
+              , arRelease = release
+              , arSize    = round <$> size
+              }

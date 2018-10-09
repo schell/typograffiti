@@ -1,35 +1,47 @@
-{-# LANGUAGE LambdaCase      #-}
-{-# LANGUAGE RecordWildCards #-}
 -- |
--- Module:     Gelatin.FreeType2
--- Copyright:  (c) 2017 Schell Scivally
+-- Module:     Typograffiti
+-- Copyright:  (c) 2018 Schell Scivally
 -- License:    MIT
 -- Maintainer: Schell Scivally <schell@takt.com>
 --
--- This module provides easy freetype2 font rendering using gelatin's
--- graphics primitives.
---
+-- This module provides easy freetype2-based font rendering with a nice
+-- Haskell interface.
 module Typograffiti
-  ( allocAtlas
-  , GlyphSize (..)
-  , CharSize (..)
-  , TypograffitiError (..)
-  , Atlas (..)
-  , WordCache (..)
-  , AllocatedRendering (..)
-  , Layout (..)
-  , asciiChars
-  , stringTris
-  , loadText
-  , unloadMissingWords
-  , makeDefaultAllocateWord
+  (
+  -- * Some simple default text rendering operations
+    RenderedText (..)
+  , TextRenderingData (..)
+  , FontStore
+  , newDefaultFontStore
+  , getTextRendering
+  -- * Transforming rendered text
+  , TextTransform (..)
+  -- TODO Vector variants of the transformation helpers.
+  -- i.e. moveV2, scaleV2, colorV4
   , move
   , scale
   , rotate
   , color
   , alpha
+  , Layout (..)
+  -- * Getting low
+  , allocAtlas
+  , loadText
+  , unloadMissingWords
+  , stringTris
+  , makeDefaultAllocateWord
+  , asciiChars
+  -- * Types
+  , GlyphSize (..)
+  , CharSize (..)
+  , Atlas (..)
+  , WordCache (..)
+  , AllocatedRendering (..)
+  -- * Errors
+  , TypograffitiError (..)
   ) where
 
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
 import           Typograffiti.Glyph
+import           Typograffiti.Store

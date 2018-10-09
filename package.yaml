@@ -27,6 +27,8 @@ dependencies:
 - gl
 - linear
 - mtl
+- pretty-show
+- stm
 - template-haskell
 - vector
 
