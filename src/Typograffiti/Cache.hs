@@ -271,6 +271,19 @@ fragmentShader = B8.pack $ unlines
   ]
 
 
+liftGL
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     )
+  => m (Either String a)
+  -> m a
+liftGL n = do
+  let lft = liftEither . first TypograffitiErrorGL
+  n >>= lft
+
+
+-- | A default operation for allocating one word worth of geometry. This is "word" as in
+-- an English word, not a data type.
 makeDefaultAllocateWord
   :: ( MonadIO m
      , MonadError TypograffitiError m
@@ -286,10 +299,9 @@ makeDefaultAllocateWord
 makeDefaultAllocateWord getContextSize = do
   let position = 0
       uv       = 1
-      liftGL   = liftEither . first TypograffitiErrorGL
-  vert <- liftGL =<< compileOGLShader vertexShader GL_VERTEX_SHADER
-  frag <- liftGL =<< compileOGLShader fragmentShader GL_FRAGMENT_SHADER
-  prog <- liftGL =<< compileOGLProgram
+  vert <- liftGL $ compileOGLShader vertexShader GL_VERTEX_SHADER
+  frag <- liftGL $ compileOGLShader fragmentShader GL_FRAGMENT_SHADER
+  prog <- liftGL $ compileOGLProgram
     [ ("position", fromIntegral position)
     , ("uv", fromIntegral uv)
     ]

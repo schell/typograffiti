@@ -1,23 +1,24 @@
 name:                typograffiti
 version:             0.1.0.0
-github:              "githubuser/typograffiti"
+github:              "schell/typograffiti"
 license:             BSD3
-author:              "Author name here"
-maintainer:          "example@example.com"
-copyright:           "2018 Author name here"
+author:              "Schell Scivally"
+maintainer:          "schell@takt.com"
+copyright:           "2018 Schell Scivally"
 
 extra-source-files:
 - README.md
 - ChangeLog.md
 
 # Metadata used when publishing your package
-# synopsis:            Short description of your package
-# category:            Web
+synopsis:            Display TTF fonts in OpenGL. Includes caching for fast
+                     rendering.
+category:            Graphics
 
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/githubuser/typograffiti#readme>
+description:         A library that lets you draw nice text already!
 
 dependencies:
 - base >= 4.7 && < 5
@@ -39,14 +40,12 @@ executables:
   typograffiti-exe:
     main:                Main.hs
     source-dirs:         app
-    other-modules:       Paths_typograffiti
     ghc-options:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
     - filepath
-    - JuicyPixels
     - pretty-show
     - sdl2
     - typograffiti
