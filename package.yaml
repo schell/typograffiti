@@ -1,5 +1,5 @@
 name:                typograffiti
-version:             0.1.0.0
+version:             0.1.0.2
 github:              "schell/typograffiti"
 license:             BSD3
 author:              "Schell Scivally"
@@ -11,14 +11,28 @@ extra-source-files:
 - ChangeLog.md
 
 # Metadata used when publishing your package
-synopsis:            Display TTF fonts in OpenGL. Includes caching for fast
-                     rendering.
+synopsis:            Just let me draw nice text already
 category:            Graphics
 
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         A library that lets you draw nice text already!
+description:         This is a text rendering library that uses OpenGL
+                     and freetype2 to render TTF font strings quickly. It is
+                     fast enough to render large chunks of text in real
+                     time. This library exists because text rendering is
+                     one of the biggest hurdles in Haskell graphics
+                     programming - and it shouldn't be!
+
+                     Typograffiti includes an MTL style typeclass and a
+                     default monad transformer. It does not assume you are
+                     using any specific windowing solution. It does assume
+                     you are using OpenGL 3.3+.
+
+                     Pull requests are very welcome :)
+
+                     See https://github.com/schell/typograffiti/blob/master/app/Main.hs
+                     for an example.
 
 dependencies:
 - base >= 4.7 && < 5

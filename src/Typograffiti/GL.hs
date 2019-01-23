@@ -4,7 +4,8 @@
 module Typograffiti.GL where
 
 import           Control.Exception      (assert)
-import           Control.Monad          (forM_, when, replicateM)
+import           Control.Monad          (forM_, replicateM, when)
+import           Control.Monad.Fail     (MonadFail)
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.ByteString        (ByteString)
 import qualified Data.ByteString.Char8  as B8
@@ -24,7 +25,7 @@ import           Linear
 import           Linear.V               (Finite, Size, dim, toV)
 
 
-allocAndActivateTex :: MonadIO m => GLenum -> m GLuint
+allocAndActivateTex :: (MonadIO m, MonadFail m) => GLenum -> m GLuint
 allocAndActivateTex u = do
   [t] <- liftIO $ allocaArray 1 $ \ptr -> do
     glGenTextures 1 ptr
@@ -42,8 +43,7 @@ clearErrors str = do
     assert False $ return ()
 
 
-newBoundVAO
-  :: MonadIO m => m GLuint
+newBoundVAO :: (MonadIO m, MonadFail m) => m GLuint
 newBoundVAO = do
   [vao] <- liftIO $ allocaArray 1 $ \ptr -> do
       glGenVertexArrays 1 ptr
