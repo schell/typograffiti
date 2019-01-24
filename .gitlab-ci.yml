@@ -1,7 +1,8 @@
 image: fpco/stack-build:latest
 cache:
-  - .stack/
-  - .stack-work/
+  paths:
+    - .stack/
+    - .stack-work/
 
 build:
   stage: build
