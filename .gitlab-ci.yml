@@ -9,3 +9,4 @@ build:
   script:
     - apt-get update -y
     - stack setup
+    - stack build
