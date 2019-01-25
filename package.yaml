@@ -1,5 +1,5 @@
 name:                typograffiti
-version:             0.1.0.2
+version:             0.1.0.3
 github:              "schell/typograffiti"
 license:             BSD3
 author:              "Schell Scivally"
@@ -36,16 +36,16 @@ description:         This is a text rendering library that uses OpenGL
 
 dependencies:
 - base >= 4.7 && < 5
-- bytestring
-- containers
-- freetype2
-- gl
-- linear
-- mtl
-- pretty-show
-- stm
-- template-haskell
-- vector
+- bytestring >= 0.10
+- containers >= 0.6
+- freetype2 >= 0.1
+- gl >= 0.8
+- linear >= 1.20
+- mtl >= 2.2
+- pretty-show >= 1.9
+- stm >= 2.5
+- template-haskell >= 2.14
+- vector >= 0.12
 
 library:
   source-dirs: src
@@ -59,9 +59,9 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - filepath
-    - pretty-show
-    - sdl2
+    - filepath >= 1.4
+    - pretty-show >= 1.9
+    - sdl2 >= 2.4.1
     - typograffiti
 
 

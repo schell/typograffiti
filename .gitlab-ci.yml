@@ -1,0 +1,12 @@
+image: fpco/stack-build:latest
+cache:
+  paths:
+    - .stack/
+    - .stack-work/
+
+build:
+  stage: build
+  script:
+    - apt-get update -y
+    - stack setup
+    - stack build
