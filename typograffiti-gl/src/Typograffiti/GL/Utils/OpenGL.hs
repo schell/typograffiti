@@ -1,7 +1,10 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase        #-}
-module Typograffiti.GL where
+module Typograffiti.GL.Utils.OpenGL
+  ( module Typograffiti.GL.Utils.OpenGL
+  , GLuint
+  ) where
 
 import           Control.Exception      (assert)
 import           Control.Monad          (forM_, replicateM, when)

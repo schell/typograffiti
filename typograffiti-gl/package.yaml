@@ -1,5 +1,5 @@
-name:                typograffiti
-version:             0.1.0.3
+name:                typograffiti-gl
+version:             0.2.0.0
 github:              "schell/typograffiti"
 license:             BSD3
 author:              "Schell Scivally"
@@ -10,8 +10,7 @@ extra-source-files:
 - README.md
 - ChangeLog.md
 
-# Metadata used when publishing your package
-synopsis:            Just let me draw nice text already
+synopsis:            Just let me draw nice text already!
 category:            Graphics
 
 # To avoid duplicated efforts in documentation and dealing with the
@@ -24,15 +23,10 @@ description:         This is a text rendering library that uses OpenGL
                      one of the biggest hurdles in Haskell graphics
                      programming - and it shouldn't be!
 
-                     Typograffiti includes an MTL style typeclass and a
+                     typograffiti-gl includes an MTL style typeclass and a
                      default monad transformer. It does not assume you are
                      using any specific windowing solution. It does assume
-                     you are using OpenGL 3.3+.
-
-                     Pull requests are very welcome :)
-
-                     See https://github.com/schell/typograffiti/blob/master/app/Main.hs
-                     for an example.
+                     you are using OpenGL 3.3+ and have freetype2 installed.
 
 dependencies:
 - base >= 4.7 && < 5
@@ -46,6 +40,7 @@ dependencies:
 - stm >= 2.5
 - template-haskell >= 2.14
 - vector >= 0.12
+- typograffiti-core
 
 library:
   source-dirs: src
@@ -61,8 +56,8 @@ executables:
     dependencies:
     - filepath >= 1.4
     - pretty-show >= 1.9
-    - sdl2 >= 2.4.1
-    - typograffiti
+    - sdl2 >= 2.4
+    - typograffiti-gl
 
 
 tests:
@@ -74,4 +69,4 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - typograffiti
+    - typograffiti-gl

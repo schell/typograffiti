@@ -1,6 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RecordWildCards  #-}
-{-# LANGUAGE TypeApplications #-}
 -- |
 -- Module:     Typograffiti.Atlas
 -- Copyright:  (c) 2018 Schell Scivally
@@ -9,8 +6,10 @@
 --
 -- This module provides a font-character atlas to use in font rendering with
 -- opengl.
---
-module Typograffiti.Atlas where
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards  #-}
+{-# LANGUAGE TypeApplications #-}
+module Typograffiti.GL.Atlas where
 
 import           Control.Monad
 import           Control.Monad.Except                              (MonadError (..))
@@ -26,21 +25,28 @@ import           Graphics.Rendering.FreeType.Internal.Bitmap       as BM
 import           Graphics.Rendering.FreeType.Internal.GlyphMetrics as GM
 import           Linear
 
-import           Typograffiti.GL
-import           Typograffiti.Glyph
-import           Typograffiti.Utils
+import           Typograffiti                                      (TypograffitiError (..))
+import           Typograffiti.Atlas                                (Atlas (..), AtlasMeasure (..),
+                                                                    emptyAM)
+import           Typograffiti.Glyph                                (CharSize (..),
+                                                                    GlyphMetrics (..),
+                                                                    GlyphSize (..))
+
+import           Typograffiti.GL.Utils.Freetype
+import           Typograffiti.GL.Utils.OpenGL
 
 
+--------------------------------------------------------------------------------
+-- Errors
+--------------------------------------------------------------------------------
 
-data TypograffitiError =
-    TypograffitiErrorNoGlyphMetricsForChar Char
-  -- ^ The are no glyph metrics for this character. This probably means
-  -- the character has not been loaded into the atlas.
-  | TypograffitiErrorFreetype String String
-  -- ^ There was a problem while interacting with the freetype2 library.
-  | TypograffitiErrorGL String
+
+data GLFTError
+  = GLError String
   -- ^ There was a problem while interacting with OpenGL.
-  deriving (Show, Eq)
+  | FreetypeError String FT_Error
+  -- ^ There was a problem while interacting with the freetype2 library.
+  deriving (Show)
 
 
 --------------------------------------------------------------------------------
@@ -48,28 +54,20 @@ data TypograffitiError =
 --------------------------------------------------------------------------------
 
 
-data Atlas = Atlas { atlasTexture     :: GLuint
-                   , atlasTextureSize :: V2 Int
-                   , atlasLibrary     :: FT_Library
-                   , atlasFontFace    :: FT_Face
-                   , atlasMetrics     :: IntMap GlyphMetrics
-                   , atlasGlyphSize   :: GlyphSize
-                   , atlasFilePath    :: FilePath
-                   }
+type GLAtlas
+  = Atlas GLuint (FT_Library, FT_Face)
 
 
-emptyAtlas :: FT_Library -> FT_Face -> GLuint -> Atlas
-emptyAtlas lib fce t = Atlas t 0 lib fce mempty (GlyphSizeInPixels 0 0) ""
+atlasLibrary :: Atlas tex (FT_Library, FT_Face) -> FT_Library
+atlasLibrary = fst . atlasResources
 
 
-data AtlasMeasure = AM { amWH      :: V2 Int
-                       , amXY      :: V2 Int
-                       , rowHeight :: Int
-                       } deriving (Show, Eq)
+atlasFontFace :: Atlas tex (FT_Library, FT_Face)  -> FT_Face
+atlasFontFace = snd . atlasResources
 
 
-emptyAM :: AtlasMeasure
-emptyAM = AM 0 (V2 1 1) 0
+emptyAtlas :: FT_Library -> FT_Face -> GLuint -> GLAtlas
+emptyAtlas lib fce t = Atlas t (lib, fce) 0 mempty (GlyphSizeInPixels 0 0) ""
 
 
 -- | The amount of spacing between glyphs rendered into the atlas's texture.
@@ -113,14 +111,28 @@ measure fce maxw (prev, am@AM{..}) char
     return (IM.insert (fromEnum char) am prev, am1)
 
 
-texturize :: IntMap (V2 Int) -> Atlas -> Char -> FreeTypeIO Atlas
-texturize xymap atlas@Atlas{..} char
+texturize
+  :: IntMap (V2 Int)
+  -> Atlas GLuint (FT_Library, FT_Face)
+  -> Char
+  -> FreeTypeIO (Atlas GLuint (FT_Library, FT_Face))
+texturize xymap atlas char
   | Just pos@(V2 x y) <- IM.lookup (fromEnum char) xymap = do
     -- Load the char
-    loadChar atlasFontFace (fromIntegral $ fromEnum char) ft_LOAD_RENDER
+    loadChar
+      (atlasFontFace atlas)
+      (fromIntegral $ fromEnum char)
+      ft_LOAD_RENDER
     -- Get the slot and bitmap
-    slot  <- liftIO $ peek $ glyph atlasFontFace
-    bmp   <- liftIO $ peek $ bitmap slot
+    slot <-
+      liftIO
+      $ peek
+      $ glyph
+      $ atlasFontFace atlas
+    bmp <-
+      liftIO
+      $ peek
+      $ bitmap slot
     -- Update our texture by adding the bitmap
     glTexSubImage2D
       GL_TEXTURE_2D
@@ -148,11 +160,12 @@ texturize xymap atlas@Atlas{..} char
                              , glyphVertBearing = vecyb
                              , glyphAdvance = vecad
                              }
-    return atlas{ atlasMetrics = IM.insert (fromEnum char) mtrcs atlasMetrics }
+    return atlas{ atlasMetrics = IM.insert (fromEnum char) mtrcs (atlasMetrics atlas) }
 
   | otherwise = do
     liftIO $ putStrLn "could not find xy"
     return atlas
+
 
 -- | Allocate a new 'Atlas'.
 -- When creating a new 'Atlas' you must pass all the characters that you
@@ -160,7 +173,7 @@ texturize xymap atlas@Atlas{..} char
 -- happens once.
 allocAtlas
   :: ( MonadIO m
-     , MonadError TypograffitiError m
+     , MonadError (TypograffitiError Char GLFTError) m
      )
   => FilePath
   -- ^ Path to the font file to use for this Atlas.
@@ -168,7 +181,7 @@ allocAtlas
   -- ^ Size of glyphs in this Atlas.
   -> String
   -- ^ The characters to include in this 'Atlas'.
-  -> m Atlas
+  -> m (Atlas GLuint (FT_Library, FT_Face))
 allocAtlas fontFilePath gs str = do
   e <- liftIO $ runFreeType $ do
     fce <- newFace fontFilePath
@@ -207,13 +220,13 @@ allocAtlas fontFilePath gs str = do
            }
 
   either
-    (throwError . TypograffitiErrorFreetype "cannot alloc atlas")
+    (throwError . TypograffitiError . FreetypeError "cannot alloc atlas")
     (return . fst)
     e
 
 
 -- | Releases all resources associated with the given 'Atlas'.
-freeAtlas :: MonadIO m => Atlas -> m ()
+freeAtlas :: MonadIO m => Atlas GLuint (FT_Library, FT_Face) -> m ()
 freeAtlas a = liftIO $ do
   _ <- ft_Done_FreeType (atlasLibrary a)
   -- _ <- unloadMissingWords a ""
@@ -223,9 +236,9 @@ freeAtlas a = liftIO $ do
 -- | Construct the geometry needed to render the given character.
 makeCharQuad
   :: ( MonadIO m
-     , MonadError TypograffitiError m
+     , MonadError (TypograffitiError Char GLFTError) m
      )
-  => Atlas
+  => Atlas GLuint (FT_Library, FT_Face)
   -- ^ The atlas that contains the metrics for the given character.
   -> Bool
   -- ^ Whether or not to use kerning.
@@ -239,24 +252,31 @@ makeCharQuad
   -- ^ Returns the generated geometry (position in 2-space and UV parameters),
   -- the next pen position and the freetype index of the given character, if
   -- available.
-makeCharQuad Atlas{..} useKerning penx mLast char = do
+makeCharQuad atlas useKerning penx mLast char = do
   let ichar = fromEnum char
-  eNdx <- withFreeType (Just atlasLibrary) $ getCharIndex atlasFontFace ichar
+  eNdx <-
+    withFreeType
+      (Just $ atlasLibrary atlas)
+      $ getCharIndex (atlasFontFace atlas) ichar
   let mndx = either (const Nothing) Just eNdx
   px <- case (,,) <$> mndx <*> mLast <*> Just useKerning of
     Just (ndx,lndx,True) -> do
-      e <- withFreeType (Just atlasLibrary) $
-        getKerning atlasFontFace lndx ndx ft_KERNING_DEFAULT
-      return $ either (const penx) ((+penx) . floor . (* 0.015625) . fromIntegral . fst) e
+      e <- withFreeType (Just $ atlasLibrary atlas) $
+        getKerning (atlasFontFace atlas) lndx ndx ft_KERNING_DEFAULT
+      return
+        $ either
+            (const penx)
+            ((+penx) . floor . (* (0.015625 :: Double)) . fromIntegral . fst)
+            e
     _  -> return $ fromIntegral penx
-  case IM.lookup ichar atlasMetrics of
-    Nothing -> throwError $ TypograffitiErrorNoGlyphMetricsForChar char
+  case IM.lookup ichar $ atlasMetrics atlas of
+    Nothing -> throwError $ TypograffitiErrorNoGlyphMetricsForGlyph char
     Just GlyphMetrics{..} -> do
       let V2 dx dy = fromIntegral <$> glyphHoriBearing
           x = fromIntegral px + dx
           y = -dy
           V2 w h = fromIntegral <$> glyphSize
-          V2 aszW aszH = fromIntegral <$> atlasTextureSize
+          V2 aszW aszH = fromIntegral <$> atlasTextureSize atlas
           V2 texL texT = fromIntegral <$> fst glyphTexBB
           V2 texR texB = fromIntegral <$> snd glyphTexBB
 
@@ -280,9 +300,9 @@ asciiChars = map toEnum [32..126]
 -- | Generate the geometry of the given string.
 stringTris
   :: ( MonadIO m
-     , MonadError TypograffitiError m
+     , MonadError (TypograffitiError Char GLFTError)  m
      )
-  => Atlas
+  => Atlas GLuint (FT_Library, FT_Face)
   -- ^ The font atlas.
   -> Bool
   -- ^ Whether or not to use kerning.

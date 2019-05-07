@@ -9,4 +9,6 @@ build:
   script:
     - apt-get update -y
     - stack setup
+    - stack install cabal-install
     - stack build
+    - stack haddock --haddock-deps --haddock-hyperlink-source

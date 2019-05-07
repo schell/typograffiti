@@ -1,9 +1,10 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase    #-}
 {-# LANGUAGE TupleSections #-}
-module Typograffiti.Utils (
-   module FT
+module Typograffiti.GL.Utils.Freetype
+ ( module FT
  , FreeTypeT
  , FreeTypeIO
+ , FT_Error (..)
  , getAdvance
  , getCharIndex
  , getLibrary
@@ -19,25 +20,24 @@ module Typograffiti.Utils (
  , runFreeType
 ) where
 
-import           Control.Monad.IO.Class (MonadIO, liftIO)
+import           Control.Monad                                       (unless)
 import           Control.Monad.Except
+import           Control.Monad.IO.Class                              (MonadIO,
+                                                                      liftIO)
 import           Control.Monad.State.Strict
-import           Control.Monad (unless)
-import           Graphics.Rendering.FreeType.Internal                   as FT
-import           Graphics.Rendering.FreeType.Internal.PrimitiveTypes    as FT
-import           Graphics.Rendering.FreeType.Internal.Library           as FT
-import           Graphics.Rendering.FreeType.Internal.FaceType          as FT
-import           Graphics.Rendering.FreeType.Internal.Face as FT hiding (generic)
-import           Graphics.Rendering.FreeType.Internal.GlyphSlot         as FT
-import           Graphics.Rendering.FreeType.Internal.Bitmap            as FT
-import           Graphics.Rendering.FreeType.Internal.Vector            as FT
-import           Foreign                                                as FT
-import           Foreign.C.String                                       as FT
+import           Foreign                                             as FT
+import           Foreign.C.String                                    as FT
+import           Graphics.Rendering.FreeType.Internal                as FT
+import           Graphics.Rendering.FreeType.Internal.Bitmap         as FT
+import           Graphics.Rendering.FreeType.Internal.Face           as FT hiding
+                                                                            (generic)
+import           Graphics.Rendering.FreeType.Internal.GlyphSlot      as FT
+import           Graphics.Rendering.FreeType.Internal.Library        as FT
+import           Graphics.Rendering.FreeType.Internal.PrimitiveTypes as FT
+import           Graphics.Rendering.FreeType.Internal.Vector         as FT
 
--- TODO: Tease out the correct way to handle errors.
--- They're kinda thrown all willy nilly.
 
-type FreeTypeT m = ExceptT String (StateT FT_Library m)
+type FreeTypeT m = ExceptT FT_Error (StateT FT_Library m)
 type FreeTypeIO = FreeTypeT IO
 
 
@@ -62,7 +62,7 @@ runIOErr msg f = do
   unless (e == 0) $ fail $ unwords [msg, show e]
 
 
-runFreeType :: MonadIO m => FreeTypeT m a -> m (Either String (a, FT_Library))
+runFreeType :: MonadIO m => FreeTypeT m a -> m (Either FT_Error (a, FT_Library))
 runFreeType f = do
   (e,lib) <- liftIO $ alloca $ \p -> do
     e <- ft_Init_FreeType p
@@ -71,10 +71,10 @@ runFreeType f = do
   if e /= 0
     then do
       _ <- liftIO $ ft_Done_FreeType lib
-      return $ Left $ "Error initializing FreeType2:" ++ show e
+      return $ Left e
     else fmap (,lib) <$> evalStateT (runExceptT f) lib
 
-withFreeType :: MonadIO m => Maybe FT_Library -> FreeTypeT m a -> m (Either String a)
+withFreeType :: MonadIO m => Maybe FT_Library -> FreeTypeT m a -> m (Either FT_Error a)
 withFreeType Nothing f = runFreeType f >>= \case
   Left e -> return $ Left e
   Right (a,lib) -> do
