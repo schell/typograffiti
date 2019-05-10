@@ -31,8 +31,6 @@ module Typograffiti
   , scale
   , scaleV2
   , rotate
-  -- * Errors
-  , TypograffitiError (..)
   ) where
 
 import           Typograffiti.Atlas

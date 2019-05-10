@@ -355,16 +355,3 @@ orthoProjection
 orthoProjection (V2 ww wh) =
   let (hw,hh) = (fromIntegral ww, fromIntegral wh)
   in ortho 0 hw hh 0 0 1
-
-
-boundingBox :: (Unbox a, Real a, Fractional a) => UV.Vector (V2 a) -> (V2 a, V2 a)
-boundingBox vs
-  | UV.null vs = (0,0)
-  | otherwise = UV.foldl' f (br,tl) vs
-  where mn a = min a . realToFrac
-        mx a = max a . realToFrac
-        f (a, b) c = (mn <$> a <*> c, mx <$> b <*> c)
-        inf = 1/0
-        ninf = (-1)/0
-        tl = V2 ninf ninf
-        br = V2 inf inf

@@ -10,9 +10,7 @@ module Typograffiti.GL
   , alpha
   , allocAtlas
   , loadText
-  , stringTris
   , makeDefaultAllocateWord
-  , GLFTError (..)
   ) where
 
 import           Typograffiti
@@ -21,4 +19,3 @@ import           Typograffiti.GL.Atlas
 import           Typograffiti.GL.Cache
 import           Typograffiti.GL.Store
 import           Typograffiti.GL.Transform
-import           Typograffiti.Glyph

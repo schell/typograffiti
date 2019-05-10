@@ -17,7 +17,7 @@ import           Typograffiti.GL
 
 myTextStuff
   :: ( MonadIO m
-     , MonadError (TypograffitiError Char GLFTError) m
+     , MonadError String m
      )
   => Window -> m ()
 myTextStuff w = do
@@ -46,7 +46,8 @@ myTextStuff w = do
     glViewport 0 0 (fromIntegral dw) (fromIntegral dh)
 
     draw [move 20 32, rotate (pi / 4), color 1 0 1 1, alpha 0.5]
-    draw [move 100 100, color 1 1 1 1, scale 2 2]
+    --draw [move 100 100, color 1 1 1 1, scale 2 2]
+    draw [move 100 100]
 
     glSwapWindow w
     unless (QuitEvent `elem` events) loop

@@ -8,25 +8,25 @@
 module Typograffiti.GL.Store where
 
 
-import           Control.Concurrent.STM         (atomically, newTMVar)
-import           Control.Monad.Except           (MonadError (..))
-import           Control.Monad.IO.Class         (MonadIO (..))
-import qualified Data.Set                       as S
+import           Control.Concurrent.STM       (atomically, newTMVar)
+import           Control.Monad.Except         (MonadError (..))
+import           Control.Monad.IO.Class       (MonadIO (..))
+import qualified Data.Set                     as S
 import           Linear
 
 
-import           Typograffiti                   (GlyphRenderingData (..),
-                                                 GlyphSize, RenderedGlyphs,
-                                                 Transform, TypograffitiError)
-import qualified Typograffiti                   as Core
-import           Typograffiti.Store             (Dictionary, Store (..))
+import           Typograffiti                 (GlyphRenderingData (..),
+                                               GlyphSize, RenderedGlyphs,
+                                               Transform)
+import qualified Typograffiti                 as Core
+import           Typograffiti.Store           (Dictionary, Store (..))
 
-import           Typograffiti.GL.Atlas          (GLFTError, allocAtlas)
-import           Typograffiti.GL.Cache          (makeDefaultAllocateWord)
-import           Typograffiti.GL.Transform      (Multiply, TextTransform,
-                                                 translate)
-import           Typograffiti.GL.Utils.Freetype (FT_Face, FT_Library)
-import           Typograffiti.GL.Utils.OpenGL   (GLuint)
+import           Typograffiti.Freetype        (FT_Face, FT_Library)
+import           Typograffiti.GL.Atlas        (allocAtlas)
+import           Typograffiti.GL.Cache        (makeDefaultAllocateWord)
+import           Typograffiti.GL.Transform    (Multiply, TextTransform,
+                                               translate)
+import           Typograffiti.GL.Utils.OpenGL (GLuint)
 
 
 -- | A pre-rendered bit of text, ready to display given
@@ -45,7 +45,6 @@ type TextRenderingData
       GLuint
       (FT_Library, FT_Face)
       [TextTransform]
-      GLFTError
 
 
 -- | Stored fonts at specific sizes.
@@ -55,12 +54,11 @@ type FontStore =
     (FT_Library, FT_Face)
     [TextTransform]
     Char
-    GLFTError
 
 
 getTextRendering
   :: ( MonadIO m
-     , MonadError (TypograffitiError Char GLFTError) m
+     , MonadError String m
      )
   => FontStore
   -- ^ The font store.
@@ -79,7 +77,7 @@ getTextRendering =
 
 newDefaultFontStore
   :: ( MonadIO m
-     , MonadError (TypograffitiError Char GLFTError) m
+     , MonadError String m
      , Integral i
      )
   => IO (V2 i)

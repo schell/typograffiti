@@ -41,12 +41,13 @@ dependencies:
 - template-haskell >= 2.14
 - vector >= 0.12
 - typograffiti-core
+- typograffiti-freetype
 
 library:
   source-dirs: src
 
 executables:
-  typograffiti-exe:
+  typograffiti-gl-exe:
     main:                Main.hs
     source-dirs:         app
     ghc-options:

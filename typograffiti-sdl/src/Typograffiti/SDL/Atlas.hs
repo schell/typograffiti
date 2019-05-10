@@ -1,38 +1,34 @@
 -- |
--- Module:     Typograffiti.Atlas
--- Copyright:  (c) 2018 Schell Scivally
--- License:    MIT
--- Maintainer: Schell Scivally <schell@takt.com>
---
 -- This module provides a font-character atlas to use in font rendering with
--- opengl.
+-- sdl2's built in 2d renderer.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards  #-}
 {-# LANGUAGE TypeApplications #-}
-module Typograffiti.GL.Atlas where
+module Typograffiti.SDL.Atlas where
 
 import           Control.Monad
 import           Control.Monad.Except                              (MonadError (..))
 import           Control.Monad.IO.Class
+import qualified Data.ByteString                                   as BS
 import           Data.IntMap                                       (IntMap)
 import qualified Data.IntMap                                       as IM
 import           Data.Vector.Unboxed                               (Vector)
 import qualified Data.Vector.Unboxed                               as UV
 import           Foreign.Marshal.Utils                             (with)
-import           Graphics.GL.Core32
-import           Graphics.GL.Types
 import           Graphics.Rendering.FreeType.Internal.Bitmap       as BM
 import           Graphics.Rendering.FreeType.Internal.GlyphMetrics as GM
 import           Linear
+import           SDL                                               (Renderer,
+                                                                    Texture,
+                                                                    ($=))
+import qualified SDL
 
 import           Typograffiti.Atlas                                (Atlas (..), AtlasMeasure (..),
                                                                     emptyAM)
+import           Typograffiti.Freetype
 import           Typograffiti.Glyph                                (CharSize (..),
                                                                     GlyphMetrics (..),
                                                                     GlyphSize (..))
-
-import           Typograffiti.Freetype
-import           Typograffiti.GL.Utils.OpenGL
 
 
 --------------------------------------------------------------------------------
@@ -40,29 +36,36 @@ import           Typograffiti.GL.Utils.OpenGL
 --------------------------------------------------------------------------------
 
 
-type GLAtlas
-  = Atlas GLuint (FT_Library, FT_Face)
+type SDLAtlas
+  = Atlas Texture (FT_Library, FT_Face)
 
 
 texturize
-  :: IntMap (V2 Int)
-  -> Atlas GLuint (FT_Library, FT_Face)
+  :: Texture
+  -> IntMap (V2 Int)
+  -> Atlas Texture (FT_Library, FT_Face)
   -> Char
-  -> FreeTypeIO (Atlas GLuint (FT_Library, FT_Face))
-texturize xymap atlas char
+  -> FreeTypeIO (Atlas Texture (FT_Library, FT_Face))
+texturize tex xymap atlas char
   | Just pos@(V2 x y) <- IM.lookup (fromEnum char) xymap = do
     (bmp, ftms) <- getFreetypeChar atlas char
     -- Update our texture by adding the bitmap
-    glTexSubImage2D
-      GL_TEXTURE_2D
-      0
-      (fromIntegral x)
-      (fromIntegral y)
-      (fromIntegral $ BM.width bmp)
-      (fromIntegral $ rows bmp)
-      GL_RED
-      GL_UNSIGNED_BYTE
-      (castPtr $ buffer bmp)
+    let dest = SDL.Rectangle (SDL.P pos) (fromIntegral <$> V2 (BM.width bmp) (rows bmp))
+    bytes <-
+      liftIO
+        $ BS.packCStringLen (BM.buffer bmp, fromIntegral $ BM.width bmp * rows bmp)
+    let rgbaBytes =
+          flip BS.concatMap
+            bytes
+            $ \val -> foldr BS.cons BS.empty [val,255,255,255]
+    liftIO $ print (char, V2 (BM.width bmp) (rows bmp), BM.pitch bmp)
+    unless (BM.pitch bmp == 0)
+      $ void
+      $ SDL.updateTexture
+          tex
+          (Just $ fromIntegral <$> dest)
+          rgbaBytes
+          (BM.width bmp * 4)
     -- Add the metrics to the atlas
     let vecwh = fromIntegral <$> V2 (BM.width bmp) (rows bmp)
         canon = floor @Double @Int . (* 0.015625) . fromIntegral
@@ -86,20 +89,22 @@ texturize xymap atlas char
 
 -- | Allocate a new 'Atlas'.
 -- When creating a new 'Atlas' you must pass all the characters that you
--- might need during the life of the 'Atlas'. Character texturization only
+-- might need during the life of the 'Atlas'. Glyph texturization only
 -- happens once.
 allocAtlas
   :: ( MonadIO m
      , MonadError String m
      )
-  => FilePath
+  => Renderer
+  -- ^ The SDL 2d renderer.
+  -> FilePath
   -- ^ Path to the font file to use for this Atlas.
   -> GlyphSize
   -- ^ Size of glyphs in this Atlas.
   -> String
   -- ^ The characters to include in this 'Atlas'.
-  -> m (Atlas GLuint (FT_Library, FT_Face))
-allocAtlas fontFilePath gs str = do
+  -> m (Atlas Texture (FT_Library, FT_Face))
+allocAtlas r fontFilePath gs str = do
   e <- liftIO $ runFreeType $ do
     fce <- newFace fontFilePath
     case gs of
@@ -111,25 +116,16 @@ allocAtlas fontFilePath gs str = do
     let V2 w h = amWH am
         xymap :: IntMap (V2 Int)
         xymap  = amXY <$> amMap
-
-    t <- liftIO $ do
-      t <- allocAndActivateTex GL_TEXTURE0
-      glPixelStorei GL_UNPACK_ALIGNMENT 1
-      withCString (replicate (w * h) $ toEnum 0) $
-        glTexImage2D GL_TEXTURE_2D 0 GL_RED (fromIntegral w) (fromIntegral h)
-                     0 GL_RED GL_UNSIGNED_BYTE . castPtr
-      return t
-
+    liftIO $ print ("allocAtlas", str, V2 w h)
+    t <-
+      SDL.createTexture
+        r
+        SDL.RGBA8888
+        SDL.TextureAccessStreaming
+        (fromIntegral <$> V2 w h)
+    --SDL.textureBlendMode t $= SDL.BlendAlphaBlend
     lib   <- getLibrary
-    atlas <- foldM (texturize xymap) (emptyAtlas lib fce t) str
-
-    glGenerateMipmap GL_TEXTURE_2D
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
-    glBindTexture GL_TEXTURE_2D 0
-    glPixelStorei GL_UNPACK_ALIGNMENT 4
+    atlas <- foldM (texturize t xymap) (emptyAtlas lib fce t) str
     return
       atlas{ atlasTextureSize = V2 w h
            , atlasGlyphSize = gs
@@ -143,8 +139,8 @@ allocAtlas fontFilePath gs str = do
 
 
 -- | Releases all resources associated with the given 'Atlas'.
-freeAtlas :: MonadIO m => Atlas GLuint (FT_Library, FT_Face) -> m ()
+freeAtlas :: MonadIO m => Atlas Texture (FT_Library, FT_Face) -> m ()
 freeAtlas a = liftIO $ do
   _ <- ft_Done_FreeType (atlasLibrary a)
   -- _ <- unloadMissingWords a ""
-  with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
+  SDL.destroyTexture (atlasTexture a)

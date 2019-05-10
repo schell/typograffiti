@@ -1,42 +1,39 @@
-{-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE RankNTypes                 #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | Provides a method of caching rendererd text, making it suitable
 -- for interactive rendering.
 module Typograffiti.GL.Cache where
 
-import           Control.Monad.Except           (MonadError (..), liftEither,
-                                                 runExceptT)
-import           Control.Monad.IO.Class         (MonadIO (..))
-import           Data.Bifunctor                 (first)
-import           Data.ByteString                (ByteString)
-import qualified Data.ByteString.Char8          as B8
-import qualified Data.Vector.Unboxed            as UV
+import           Control.Monad.Except         (MonadError (..), liftEither,
+                                               runExceptT)
+import           Control.Monad.IO.Class       (MonadIO (..))
+import           Data.ByteString              (ByteString)
+import qualified Data.ByteString.Char8        as B8
+import qualified Data.Vector.Unboxed          as UV
 import           Foreign.Marshal.Array
 import           Graphics.GL
 import           Linear
 
-import qualified Typograffiti                   as Core
-import           Typograffiti.Atlas             (Atlas (..))
-import           Typograffiti.Cache             (AllocatedRendering (..),
-                                                 TypograffitiError (..),
-                                                 WordCache)
-import           Typograffiti.Transform         (Affine (..), Transform (..))
+import qualified Typograffiti                 as Core
+import           Typograffiti.Atlas           (Atlas (..))
+import           Typograffiti.Cache           (AllocatedRendering (..),
+                                               WordCache)
+import           Typograffiti.Transform       (Affine (..), Transform (..))
 
-import           Typograffiti.GL.Atlas          (GLFTError (..), stringTris)
-import           Typograffiti.GL.Transform      (Multiply (..), TextTransform,
-                                                 translate)
-import           Typograffiti.GL.Utils.Freetype (FT_Face, FT_Library)
-import           Typograffiti.GL.Utils.OpenGL   (boundingBox, bufferGeometry,
-                                                 compileOGLProgram,
-                                                 compileOGLShader, drawVAO,
-                                                 getUniformLocation, mat4Rotate,
-                                                 mat4Scale, mat4Translate,
-                                                 newBoundVAO, newBuffer,
-                                                 orthoProjection, updateUniform,
-                                                 withBoundTextures)
+import           Typograffiti.Freetype        (FT_Face, FT_Library, boundingBox, stringTris)
+import           Typograffiti.GL.Transform    (Multiply (..), TextTransform,
+                                               translate)
+import           Typograffiti.GL.Utils.OpenGL (bufferGeometry,
+                                               compileOGLProgram,
+                                               compileOGLShader, drawVAO,
+                                               getUniformLocation, mat4Rotate,
+                                               mat4Scale, mat4Translate,
+                                               newBoundVAO, newBuffer,
+                                               orthoProjection, updateUniform,
+                                               withBoundTextures)
 
 
 -- | Load the given text into the given WordCache using the given monadic
@@ -44,18 +41,21 @@ import           Typograffiti.GL.Utils.OpenGL   (boundingBox, bufferGeometry,
 -- This is a specialized version of Typograffiti.Cache.loadText.
 loadText
   :: ( MonadIO m
-     , MonadError (TypograffitiError Char GLFTError) m
+     , MonadError String m
      )
-  => (Atlas GLuint (FT_Library, FT_Face) -> String -> m (AllocatedRendering [TextTransform]))
+  => ( Atlas GLuint (FT_Library, FT_Face)
+       -> String
+       -> m (AllocatedRendering [TextTransform] GLuint)
+     )
   -- ^ Monadic operation used to allocate a word.
   -> Atlas GLuint (FT_Library, FT_Face)
   -- ^ The character atlas that holds our letters.
-  -> WordCache Char [TextTransform]
+  -> WordCache Char [TextTransform] GLuint
   -- ^ The WordCache to load AllocatedRenderings into.
   -> String
   -- ^ The string to render.
   -- This string may contain newlines, which will be respected.
-  -> m ([TextTransform] -> IO (), V2 Int, WordCache Char [TextTransform])
+  -> m ([TextTransform] -> IO (), V2 Int, WordCache Char [TextTransform] GLuint)
   -- ^ Returns a function for rendering the text, the size of the text and the
   -- new WordCache with the allocated renderings of the text.
 loadText = Core.loadWords translate Core.charGlyphAction
@@ -109,20 +109,18 @@ fragmentShader = B8.pack $ unlines
 
 liftGL
   :: ( MonadIO m
-     , MonadError (TypograffitiError Char GLFTError) m
+     , MonadError String m
      )
   => m (Either String a)
   -> m a
-liftGL n = do
-  let lft = liftEither . first (TypograffitiError . GLError)
-  n >>= lft
+liftGL m = m >>= liftEither
 
 
 -- | A default operation for allocating one word worth of geometry. This is "word" as in
 -- an English word, not a data type.
 makeDefaultAllocateWord
   :: ( MonadIO m
-     , MonadError (TypograffitiError Char GLFTError) m
+     , MonadError String m
      , Integral i
      )
   => IO (V2 i)
@@ -130,7 +128,7 @@ makeDefaultAllocateWord
   -- This is used to set the orthographic projection for rendering text.
   -> m (Atlas GLuint (FT_Library, FT_Face)
         -> String
-        -> IO (Either (TypograffitiError Char GLFTError) (AllocatedRendering [TextTransform]))
+        -> IO (Either String (AllocatedRendering [TextTransform] GLuint))
        )
 makeDefaultAllocateWord getContextSize = do
   let position = 0
@@ -192,7 +190,8 @@ makeDefaultAllocateWord getContextSize = do
             size = br - tl
         return
           $ Right AllocatedRendering
-              { arDraw    = draw
-              , arRelease = release
-              , arSize    = round <$> size
+              { arDraw     = draw
+              , arTextures = []
+              , arRelease  = release
+              , arSizes    = [round <$> size]
               }

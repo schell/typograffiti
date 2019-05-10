@@ -50,7 +50,7 @@ data RenderedGlyphs tfrm m
 data Dictionary tex rs a tfrm
   = Dictionary
   { dictAtlas     :: Atlas tex rs
-  , dictWordCache :: WordCache a tfrm
+  , dictWordCache :: WordCache a tfrm tex
   }
 
 
@@ -62,12 +62,12 @@ data Dictionary tex rs a tfrm
 --   renderings
 -- * 'a' is the type of the glyph
 -- * 'e' is the type of extended errors that can be thrown, see TypograffitiError
-data GlyphRenderingData tex rs tfrm a e
+data GlyphRenderingData tex rs tfrm a
   = GlyphRenderingData
   { glyphRenderingDataAllocWord
       :: Atlas tex rs
       -> [a]
-      -> IO (Either (TypograffitiError a e) (AllocatedRendering tfrm))
+      -> IO (Either String (AllocatedRendering tfrm tex))
   -- ^ The operation used to alloc a word.
   -- Generate geometry, use a shader program, set uniforms, etc.
   , glyphRenderingDataDictMap   :: Map (FilePath, GlyphSize) (Dictionary tex rs a tfrm)
@@ -78,15 +78,15 @@ data GlyphRenderingData tex rs tfrm a e
 
 
 -- | Stored GlyphRenderingData
-newtype Store tex rs tfrm a e
+newtype Store tex rs tfrm a
   = Store
-  { unStore :: TMVar (GlyphRenderingData tex rs tfrm a e)}
+  { unStore :: TMVar (GlyphRenderingData tex rs tfrm a) }
 
 
 -- | Return
 getRendering
   :: ( MonadIO m
-     , MonadError (TypograffitiError a e) m
+     , MonadError String m
      , Ord a
      )
   => (FilePath -> GlyphSize -> [a] -> m (Atlas tex rs))
@@ -95,7 +95,7 @@ getRendering
   -- ^ Pure function for translating a transform.
   -> (a -> GlyphAction)
   -- ^ Pure function for determining the action a glyph has on the renderer.
-  -> Store tex rs tfrm a e
+  -> Store tex rs tfrm a
   -- ^ The dictionary store.
   -> FilePath
   -- ^ The path to the font/glyph file (whatever that may be) to use for rendering.
@@ -135,11 +135,11 @@ getRendering allocAtlas translate mkAction store file sz str = do
 
 allocDictionary
   :: ( MonadIO m
-     , MonadError (TypograffitiError a e) m
+     , MonadError String m
      , Ord a
      )
   => (FilePath -> GlyphSize -> [a] -> m (Atlas tex rs))
-  -> Store tex rs tfrm a e
+  -> Store tex rs tfrm a
   -> FilePath
   -> GlyphSize
   -> m (Dictionary tex rs a tfrm)
