@@ -48,53 +48,55 @@ myTextStuff r = do
     SDL.rendererDrawColor r $= V4 175 175 175 255
     SDL.clear r
 
-    s@(GlyphRenderingData _ dict _) <-
-      liftIO
-        $ atomically
-        $ takeTMVar
-        $ unStore store
+    --s@(GlyphRenderingData _ dict _) <-
+    --  liftIO
+    --    $ atomically
+    --    $ takeTMVar
+    --    $ unStore store
 
-    case M.lookup (ttfName, glyphSz) dict of
-      Nothing -> return ()
-      Just (Dictionary atlas cache) -> do
-        SDL.copy
-          r
-          (atlasTexture atlas)
-          Nothing
-          $ Just
-          $ SDL.Rectangle
-             0
-             $ fromIntegral
-               <$> atlasTextureSize atlas
+    --case M.lookup (ttfName, glyphSz) dict of
+    --  Nothing -> return ()
+    --  Just (Dictionary atlas cache) -> do
+    --    SDL.copy
+    --      r
+    --      (atlasTexture atlas)
+    --      Nothing
+    --      $ Just
+    --      $ SDL.Rectangle
+    --         0
+    --         $ fromIntegral
+    --           <$> atlasTextureSize atlas
 
-        let V2 _ startingY = atlasTextureSize atlas
-            renderTex y ar = do
-              case (arTextures ar, arSizes ar) of
-                (tex:_, sz@(V2 _ szy):_) -> do
-                  SDL.copy
-                    r
-                    tex
-                    Nothing
-                    $ Just
-                    $ SDL.Rectangle
-                        (SDL.P $ fromIntegral <$> V2 0 y)
-                        $ fromIntegral
-                          <$> sz
-                  return $ y + szy
-                (_, _) -> return y
-        foldM_
-          renderTex
-          startingY
-          $ M.elems
-          $ unWordCache cache
+    --    let V2 _ startingY = atlasTextureSize atlas
+    --        renderTex y ar = do
+    --          case (arTextures ar, arSizes ar) of
+    --            (tex:_, sz@(V2 _ szy):_) -> do
+    --              SDL.copy
+    --                r
+    --                tex
+    --                Nothing
+    --                $ Just
+    --                $ SDL.Rectangle
+    --                    (SDL.P $ fromIntegral <$> V2 0 y)
+    --                    $ fromIntegral
+    --                      <$> sz
+    --              return $ y + szy
+    --            (_, _) -> return y
+    --    foldM_
+    --      renderTex
+    --      startingY
+    --      $ M.elems
+    --      $ unWordCache cache
 
-    liftIO
-      $ atomically
-      $ putTMVar
-          (unStore store)
-          s
+    --liftIO
+    --  $ atomically
+    --  $ putTMVar
+    --      (unStore store)
+    --      s
 
     draw [move 100 100, color 1.0 0 0 1.0]
+    draw [move 100 120, color 1.0 1.0 1.0 1.0]
+
     SDL.present r
     unless (SDL.QuitEvent `elem` events) loop
 

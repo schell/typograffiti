@@ -58,7 +58,6 @@ texturize tex xymap atlas char
           flip BS.concatMap
             bytes
             $ \val -> foldr BS.cons BS.empty [val,255,255,255]
-    liftIO $ print (char, V2 (BM.width bmp) (rows bmp), BM.pitch bmp)
     unless (BM.pitch bmp == 0)
       $ void
       $ SDL.updateTexture
@@ -116,7 +115,6 @@ allocAtlas r fontFilePath gs str = do
     let V2 w h = amWH am
         xymap :: IntMap (V2 Int)
         xymap  = amXY <$> amMap
-    liftIO $ print ("allocAtlas", str, V2 w h)
     t <-
       SDL.createTexture
         r

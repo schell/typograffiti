@@ -115,8 +115,6 @@ makeDefaultAllocateWord r = return $ \atlas -> \case
       Right quads -> do
         let (tl, br) = quadsBounds quads
             (sz@(V2 _ szh)) = br - tl
-        liftIO $ putStrLn ""
-        liftIO $ print ("makeDefaultAllocateWord", string, tl, br, sz)
         tex <-
           SDL.createTexture
             r
@@ -135,12 +133,6 @@ makeDefaultAllocateWord r = return $ \atlas -> \case
               srcRect = quad2Rectangle (cvtSrc srcTL, cvtSrc srcBR)
               cvtDest v = V2 (v ^. _x) (sz ^. _y + v ^. _y - br ^. _y)
               destRect = quad2Rectangle (cvtDest destTL, cvtDest destBR)
-          liftIO
-            $ putStrLn
-            $ unlines
-              [ "   src: " ++ (show (srcTL, srcBR, srcRect))
-              , "  dest: " ++ (show (destTL, destBR, destRect))
-              ]
           SDL.copy
             r
             (atlasTexture atlas)
@@ -167,7 +159,7 @@ makeDefaultAllocateWord r = return $ \atlas -> \case
                        (SDL.P $ round <$> pos)
                        $ round <$> scl * sz
                 )
-                0 --(realToFrac rot)
+                (realToFrac rot)
                 (Just $ (P $ round <$> pos))
                 (V2 False False)
             release = SDL.destroyTexture tex
