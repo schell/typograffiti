@@ -17,4 +17,3 @@ cabal.config
 .projectile
 TAGS
 *.#*
-*.cabal

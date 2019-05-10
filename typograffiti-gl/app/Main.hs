@@ -12,18 +12,18 @@ import           Graphics.GL
 import           SDL                    hiding (rotate)
 import           System.FilePath        ((</>))
 
-import           Typograffiti
+import           Typograffiti.GL
 
 
 myTextStuff
   :: ( MonadIO m
-     , MonadError TypograffitiError m
+     , MonadError String m
      )
   => Window -> m ()
 myTextStuff w = do
   let ttfName = "assets" </> "Lora-Regular.ttf"
   store <- newDefaultFontStore (get $ windowSize w)
-  RenderedText draw size <-
+  RenderedGlyphs draw size <-
     getTextRendering
       store
       ttfName
@@ -33,7 +33,7 @@ myTextStuff w = do
           , "This is a test of the emergency word system."
           , "Quit at any time."
           ]
-  liftIO $ print ("text size", size)
+  liftIO $ print ("text size" :: String, size)
 
   fix $ \loop -> do
     events <- fmap eventPayload
@@ -46,6 +46,8 @@ myTextStuff w = do
     glViewport 0 0 (fromIntegral dw) (fromIntegral dh)
 
     draw [move 20 32, rotate (pi / 4), color 1 0 1 1, alpha 0.5]
+    --draw [move 100 100, color 1 1 1 1, scale 2 2]
+    draw [move 100 100]
 
     glSwapWindow w
     unless (QuitEvent `elem` events) loop
