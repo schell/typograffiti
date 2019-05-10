@@ -1,0 +1,107 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.30.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 429fd143b06721f85e57717f0bb392d9cfe55e6833986908cd2bec2494f1c996
+
+name:           typograffiti-gl
+version:        0.2.0.0
+synopsis:       Just let me draw nice text already!
+description:    This is a text rendering library that uses OpenGL and freetype2 to render TTF font strings quickly. It is fast enough to render large chunks of text in real time. This library exists because text rendering is one of the biggest hurdles in Haskell graphics programming - and it shouldn't be!
+                typograffiti-gl includes an MTL style typeclass and a default monad transformer. It does not assume you are using any specific windowing solution. It does assume you are using OpenGL 3.3+ and have freetype2 installed.
+category:       Graphics
+homepage:       https://github.com/schell/typograffiti#readme
+bug-reports:    https://github.com/schell/typograffiti/issues
+author:         Schell Scivally
+maintainer:     schell@takt.com
+copyright:      2018 Schell Scivally
+license:        BSD3
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+source-repository head
+  type: git
+  location: https://github.com/schell/typograffiti
+
+library
+  exposed-modules:
+      Typograffiti.GL
+      Typograffiti.GL.Atlas
+      Typograffiti.GL.Cache
+      Typograffiti.GL.Store
+      Typograffiti.GL.Transform
+      Typograffiti.GL.Utils.OpenGL
+  other-modules:
+      Paths_typograffiti_gl
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5
+    , bytestring >=0.10
+    , containers >=0.6
+    , freetype2 >=0.1
+    , gl >=0.8
+    , linear >=1.20
+    , mtl >=2.2
+    , pretty-show >=1.9
+    , stm >=2.5
+    , template-haskell >=2.14
+    , typograffiti-core
+    , typograffiti-freetype
+    , vector >=0.12
+  default-language: Haskell2010
+
+executable typograffiti-gl-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_typograffiti_gl
+  hs-source-dirs:
+      app
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , bytestring >=0.10
+    , containers >=0.6
+    , filepath >=1.4
+    , freetype2 >=0.1
+    , gl >=0.8
+    , linear >=1.20
+    , mtl >=2.2
+    , pretty-show >=1.9
+    , sdl2 >=2.4
+    , stm >=2.5
+    , template-haskell >=2.14
+    , typograffiti-core
+    , typograffiti-freetype
+    , typograffiti-gl
+    , vector >=0.12
+  default-language: Haskell2010
+
+test-suite typograffiti-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_typograffiti_gl
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , bytestring >=0.10
+    , containers >=0.6
+    , freetype2 >=0.1
+    , gl >=0.8
+    , linear >=1.20
+    , mtl >=2.2
+    , pretty-show >=1.9
+    , stm >=2.5
+    , template-haskell >=2.14
+    , typograffiti-core
+    , typograffiti-freetype
+    , typograffiti-gl
+    , vector >=0.12
+  default-language: Haskell2010
