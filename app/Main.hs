@@ -58,9 +58,9 @@ main = do
   let openGL = defaultOpenGL
         { glProfile = Core Debug 3 3 }
       wcfg = defaultWindow
-        { windowInitialSize = V2 640 480
-        , windowOpenGL      = Just openGL
-        , windowResizable   = True
+        { windowInitialSize     = V2 640 480
+        , windowGraphicsContext = OpenGLContext openGL
+        , windowResizable       = True
         }
 
   w <- createWindow "Typograffiti" wcfg
