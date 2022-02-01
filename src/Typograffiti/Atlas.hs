@@ -22,8 +22,11 @@ import qualified Data.Vector.Unboxed                               as UV
 import           Foreign.Marshal.Utils                             (with)
 import           Graphics.GL.Core32
 import           Graphics.GL.Types
-import           Graphics.Rendering.FreeType.Internal.Bitmap       as BM
-import           Graphics.Rendering.FreeType.Internal.GlyphMetrics as GM
+import           FreeType.Core.Types                               as BM
+import           FreeType.Support.Bitmap                           as BM
+import           FreeType.Support.Bitmap.Internal                  as BM
+--import           Graphics.Rendering.FreeType.Internal.Bitmap       as BM
+--import           Graphics.Rendering.FreeType.Internal.GlyphMetrics as GM
 import           Linear
 
 import           Typograffiti.GL
@@ -95,11 +98,13 @@ measure fce maxw (prev, am@AM{..}) char
     -- https://www.freetype.org/freetype2/docs/tutorial/step1.html
     loadChar fce (fromIntegral $ fromEnum char) ft_LOAD_RENDER
     -- Get the glyph slot
-    slot <- liftIO $ peek $ glyph fce
+    fce' <- liftIO $ peek fce
+    let slot = frGlyph fce'
     -- Get the bitmap
-    bmp <- liftIO $ peek $ bitmap slot
-    let bw = fromIntegral $ BM.width bmp
-        bh = fromIntegral $ rows bmp
+    slot' <- liftIO $ peek slot
+    let bmp =  gsrBitmap slot'
+    let bw = fromIntegral $ BM.bWidth bmp
+        bh = fromIntegral $ bRows bmp
         gotoNextRow = (x + bw + spacing) >= maxw
         rh = if gotoNextRow then 0 else max bh rowHeight
         nx = if gotoNextRow then 0 else x + bw + spacing
@@ -119,28 +124,30 @@ texturize xymap atlas@Atlas{..} char
     -- Load the char
     loadChar atlasFontFace (fromIntegral $ fromEnum char) ft_LOAD_RENDER
     -- Get the slot and bitmap
-    slot  <- liftIO $ peek $ glyph atlasFontFace
-    bmp   <- liftIO $ peek $ bitmap slot
+    atlasFontFace' <- liftIO $ peek atlasFontFace
+    let slot = frGlyph atlasFontFace'
+    slot' <- liftIO $ peek slot
+    let bmp = gsrBitmap slot'
     -- Update our texture by adding the bitmap
     glTexSubImage2D
       GL_TEXTURE_2D
       0
       (fromIntegral x)
       (fromIntegral y)
-      (fromIntegral $ BM.width bmp)
-      (fromIntegral $ rows bmp)
+      (fromIntegral $ BM.bWidth bmp)
+      (fromIntegral $ bRows bmp)
       GL_RED
       GL_UNSIGNED_BYTE
-      (castPtr $ buffer bmp)
+      (castPtr $ bBuffer bmp)
     -- Get the glyph metrics
-    ftms  <- liftIO $ peek $ metrics slot
+    let ftms = gsrMetrics slot'
     -- Add the metrics to the atlas
-    let vecwh = fromIntegral <$> V2 (BM.width bmp) (rows bmp)
+    let vecwh = fromIntegral <$> V2 (BM.bWidth bmp) (bRows bmp)
         canon = floor @Double @Int . (* 0.015625) . fromIntegral
-        vecsz = canon <$> V2 (GM.width ftms) (GM.height ftms)
-        vecxb = canon <$> V2 (horiBearingX ftms) (horiBearingY ftms)
-        vecyb = canon <$> V2 (vertBearingX ftms) (vertBearingY ftms)
-        vecad = canon <$> V2 (horiAdvance ftms) (vertAdvance ftms)
+        vecsz = canon <$> V2 (gmWidth ftms) (gmHeight ftms)
+        vecxb = canon <$> V2 (gmHoriBearingX ftms) (gmHoriBearingY ftms)
+        vecyb = canon <$> V2 (gmVertBearingX ftms) (gmVertBearingY ftms)
+        vecad = canon <$> V2 (gmHoriAdvance ftms) (gmVertAdvance ftms)
         mtrcs = GlyphMetrics { glyphTexBB = (pos, pos + vecwh)
                              , glyphTexSize = vecwh
                              , glyphSize = vecsz
