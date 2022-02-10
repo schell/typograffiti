@@ -15,6 +15,7 @@ module Typograffiti.Atlas where
 import           Control.Monad
 import           Control.Monad.Except                              (MonadError (..))
 import           Control.Monad.IO.Class
+import           Data.Maybe                                        (fromMaybe)
 import           Data.IntMap                                       (IntMap)
 import qualified Data.IntMap                                       as IM
 import           Data.Vector.Unboxed                               (Vector)
@@ -179,45 +180,64 @@ allocAtlas
 allocAtlas fontFilePath gs str = do
   e <- liftIO $ runFreeType $ do
     fce <- newFace fontFilePath
-    case gs of
-      GlyphSizeInPixels w h -> setPixelSizes fce w h
-      GlyphSizeByChar (CharSize w h dpix dpiy) -> setCharSize fce w h dpix dpiy
-
-    (amMap, am) <- foldM (measure fce 512 renderGlyph) (mempty, emptyAM) str
-
-    let V2 w h = amWH am
-        xymap :: IntMap (V2 Int)
-        xymap  = amXY <$> amMap
-
-    t <- liftIO $ do
-      t <- allocAndActivateTex GL_TEXTURE0
-      glPixelStorei GL_UNPACK_ALIGNMENT 1
-      withCString (replicate (w * h) $ toEnum 0) $
-        glTexImage2D GL_TEXTURE_2D 0 GL_RED (fromIntegral w) (fromIntegral h)
-                     0 GL_RED GL_UNSIGNED_BYTE . castPtr
-      return t
-
-    lib   <- getLibrary
-    atlas <- foldM (texturize xymap) (emptyAtlas lib fce t) str
-
-    glGenerateMipmap GL_TEXTURE_2D
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
-    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
-    glBindTexture GL_TEXTURE_2D 0
-    glPixelStorei GL_UNPACK_ALIGNMENT 4
-    return
-      atlas{ atlasTextureSize = V2 w h
-           , atlasGlyphSize = gs
-           , atlasFilePath = fontFilePath
-           }
+    allocRichAtlas fontFilePath fce (Just gs) renderGlyph str
 
   either
     (throwError . TypograffitiErrorFreetype "cannot alloc atlas")
     (return . fst)
     e
 
+-- | Allocate a new 'Atlas'.
+-- When creating a new 'Atlas' you must pass all the characters that you
+-- might need during the life of the 'Atlas'. Character texturization only
+-- happens once.
+allocRichAtlas
+  :: String
+  -- ^ Key identifying this altered font.
+  -> FT_Face
+  -- ^ Raw FreeType2-loaded font.
+  -> Maybe GlyphSize
+  -- ^ Size of glyphs in this Atlas, callers may configure this externally.
+  -> (FT_GlyphSlot -> FreeTypeIO ())
+  -- ^ Callback for mutating each glyph loaded from the given font.
+  -> String
+  -- ^ The characters to include in this 'Atlas'.
+  -> FreeTypeIO Atlas
+allocRichAtlas key fce gs cb str = do
+  case gs of
+    Just (GlyphSizeInPixels w h) -> setPixelSizes fce w h
+    Just (GlyphSizeByChar (CharSize w h dpix dpiy)) -> setCharSize fce w h dpix dpiy
+    Nothing -> return ()
+
+  (amMap, am) <- foldM (measure fce 512 cb) (mempty, emptyAM) str
+
+  let V2 w h = amWH am
+      xymap :: IntMap (V2 Int)
+      xymap  = amXY <$> amMap
+
+  t <- liftIO $ do
+    t <- allocAndActivateTex GL_TEXTURE0
+    glPixelStorei GL_UNPACK_ALIGNMENT 1
+    withCString (replicate (w * h) $ toEnum 0) $
+      glTexImage2D GL_TEXTURE_2D 0 GL_RED (fromIntegral w) (fromIntegral h)
+                   0 GL_RED GL_UNSIGNED_BYTE . castPtr
+    return t
+
+  lib   <- getLibrary
+  atlas <- foldM (texturize xymap) (emptyAtlas lib fce t) str
+
+  glGenerateMipmap GL_TEXTURE_2D
+  glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
+  glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
+  glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
+  glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
+  glBindTexture GL_TEXTURE_2D 0
+  glPixelStorei GL_UNPACK_ALIGNMENT 4
+  return
+    atlas{ atlasTextureSize = V2 w h
+         , atlasGlyphSize = fromMaybe (GlyphSizeInPixels 0 0) gs
+         , atlasFilePath = key
+         }
 
 -- | Releases all resources associated with the given 'Atlas'.
 freeAtlas :: MonadIO m => Atlas -> m ()

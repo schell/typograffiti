@@ -28,6 +28,7 @@ import           Linear
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
 import           Typograffiti.Glyph
+import           Typograffiti.Utils     (FT_Face, FT_GlyphSlot, FreeTypeIO(..))
 
 
 -- | A pre-rendered bit of text, ready to display given
@@ -71,6 +72,8 @@ getTextRendering
   -> FilePath
   -- ^ The path to the font to use
   -- for rendering.
+  -- Or alternatively: the `key`
+  -- identifying a registered font.
   -> GlyphSize
   -- ^ The size of the font glyphs.
   -> String
@@ -148,4 +151,39 @@ allocFont store file sz = do
     $ atomically
     $ putTMVar mvar
     $ s{ textRenderingDataFontMap = M.insert (file, sz) font fontmap }
+  return font
+
+registerFont
+  :: Layout t
+  => FontStore t
+  -> String
+  -> FT_Face
+  -> Maybe GlyphSize
+  -> (FT_GlyphSlot -> FreeTypeIO ())
+  -> FreeTypeIO (Font t)
+-- | Register an externally-loaded font under a given key (low-level API)
+-- Allows registering a callback for mutating glyphs prior
+-- to being composited into place on the GPU, which is
+-- responsible for ensuring Typograffiti has a bitmap to composite.
+registerFont store key fce sz cb = do
+  let mvar = unFontStore store
+  s     <- liftIO $ atomically $ takeTMVar mvar
+  atlas <-
+    allocRichAtlas
+      key
+      fce
+      sz
+      cb
+      $ S.toList
+      $ textRenderingDataCharSet s
+  let fontmap = textRenderingDataFontMap s
+      font = Font
+        { fontAtlas     = atlas
+        , fontWordCache = mempty
+        }
+  let sz' = atlasGlyphSize atlas
+  liftIO
+    $ atomically
+    $ putTMVar mvar
+    $ s{ textRenderingDataFontMap = M.insert (key, sz') font fontmap }
   return font
