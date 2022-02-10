@@ -4,6 +4,7 @@ module Typograffiti.Utils (
    module FT
  , FreeTypeT
  , FreeTypeIO
+ , runIOErr
  , getAdvance
  , getCharIndex
  , getLibrary
@@ -23,6 +24,8 @@ module Typograffiti.Utils (
  , ft_LOAD_FORCE_AUTOHINT, ft_LOAD_CROP_BITMAP, ft_LOAD_PEDANTIC, ft_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH
  , ft_LOAD_NO_RECURSE, ft_LOAD_IGNORE_TRANSFORM, ft_LOAD_MONOCHROME, ft_LOAD_LINEAR_DESIGN
  , ft_LOAD_NO_AUTOHINT, ft_LOAD_COLOR, ft_LOAD_COMPUTE_METRICS, ft_LOAD_BITMAP_METRICS_ONLY
+ , gsrOutline'
+ , gsrBitmap'
 ) where
 
 import           Control.Monad.IO.Class (MonadIO, liftIO)
@@ -32,9 +35,11 @@ import           Control.Monad (unless)
 import           FreeType.Core.Base                                     as FT
 import           FreeType.Core.Base.Internal                            as FT
 import           FreeType.Core.Types                                    as FT
+import           FreeType.Support.Outline                               as FT
 import           Foreign                                                as FT
 import           Foreign.C.String                                       as FT
 import           Unsafe.Coerce
+import           Foreign.Ptr                                            (Ptr(..), plusPtr)
 
 -- TODO: Tease out the correct way to handle errors.
 -- They're kinda thrown all willy nilly.
@@ -164,3 +169,10 @@ getAdvance slot = do
   slot' <- liftIO $ peek slot
   let FT_Vector vx vy = gsrAdvance slot'
   return (fromIntegral vx, fromIntegral vy)
+
+-- Offsets taken from: https://hackage.haskell.org/package/freetype2-0.2.0/docs/src/FreeType.Circular.Types.html#line-372
+gsrOutline' :: FT_GlyphSlot -> Ptr FT_Outline
+gsrOutline' slot = plusPtr slot 200
+
+gsrBitmap' :: FT_GlyphSlot -> Ptr FT_Bitmap
+gsrBitmap' slot = plusPtr slot 152

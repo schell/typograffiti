@@ -28,7 +28,15 @@ import           Linear
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
 import           Typograffiti.Glyph
-import           Typograffiti.Utils     (FT_Face, FT_GlyphSlot, FreeTypeIO(..))
+
+-- For font registration APIs
+import           Typograffiti.Utils
+import           FreeType.Support.Bitmap.Internal
+import           FreeType.Support.Outline.Internal
+import           FreeType.Support.Outline
+import           FreeType.Core.Types
+import           Data.Maybe             (fromMaybe)
+import           System.IO
 
 
 -- | A pre-rendered bit of text, ready to display given
@@ -187,3 +195,58 @@ registerFont store key fce sz cb = do
     $ putTMVar mvar
     $ s{ textRenderingDataFontMap = M.insert (key, sz') font fontmap }
   return font
+
+registerStyledFont
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     , Layout t
+     )
+  => FontStore t
+  -> String
+  -- ^ Key by which to identify this styled font
+  -> FilePath
+  -- ^ Path to the raw fontfile
+  -> FT_Pos
+  -- ^ How much to embolden the font
+  -- Negative values lighten the font.
+  -> Maybe FT_Pos
+  -- ^ How much to embolden the font vertically, if different from horizontally.
+  -> FT_Fixed
+  -- ^ How much to slant the font, approximating italics.
+  -> GlyphSize
+  -- ^ The desired fontsize
+  -> m (Font t)
+-- | Registers font under the given key modified to approximate the desired boldness & obliqueness.
+-- Adds negligable CPU latency,
+-- but best results always come from giving the font designing full artistic control.
+-- Obliqueness isn't currently supported on bitmap fonts.
+registerStyledFont store key file weight vweight slant sz = do
+    e <- liftIO $ runFreeType $ do
+      lib <- getLibrary
+      fce <- newFace file
+      registerFont store key fce (Just sz) $ modifyGlyph lib
+
+    either
+      (throwError . TypograffitiErrorFreetype "cannot alloc atlas")
+      (return . fst)
+      e
+  where
+    modifyGlyph lib glyf = do
+      glyf' <- liftIO $ peek glyf
+      case gsrFormat glyf' of
+        FT_GLYPH_FORMAT_OUTLINE -> modifyOutline glyf
+        FT_GLYPH_FORMAT_BITMAP -> modifyBitmap lib glyf
+        x -> liftIO $ do
+          hPrint stderr "Unsupported glyph format:"
+          hPrint stderr x
+    modifyOutline glyf = do
+      let outline = gsrOutline' glyf
+      runIOErr "ft_Outline_EmboldenXY" $
+          ft_Outline_EmboldenXY' outline weight $ fromMaybe weight vweight
+      liftIO $ ft_Outline_Transform outline $ FT_Matrix 1 slant 0 1
+      renderGlyph glyf
+    modifyBitmap lib glyf = do
+      let bitmap = gsrBitmap' glyf
+      runIOErr "ft_Bitmap_Embolden" $
+          ft_Bitmap_Embolden' lib bitmap weight $ fromMaybe weight vweight
+      -- FreeType doesn't have a transform method on bitmaps.
