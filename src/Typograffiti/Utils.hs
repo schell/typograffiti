@@ -12,6 +12,7 @@ module Typograffiti.Utils (
 -- , hasKerning
  , loadChar
  , loadGlyph
+ , renderGlyph
  , newFace
  , setCharSize
  , setPixelSizes
@@ -111,6 +112,9 @@ loadGlyph ff fg flags = runIOErr "ft_Load_Glyph" $ ft_Load_Glyph' ff fg flags
 
 loadChar :: MonadIO m => FT_Face -> FT_ULong -> FT_Int32 -> FreeTypeT m ()
 loadChar ff char flags = runIOErr "ft_Load_Char" $ ft_Load_Char' ff char flags
+
+renderGlyph :: MonadIO m => FT_GlyphSlot -> FreeTypeT m ()
+renderGlyph glyph = runIOErr "ft_Render_Glyph" $ ft_Render_Glyph' glyph 0
 
 --hasKerning :: MonadIO m => FT_Face -> FreeTypeT m Bool
 --hasKerning = liftIO . ft_HAS_KERNING

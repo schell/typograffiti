@@ -25,8 +25,6 @@ import           Graphics.GL.Types
 import           FreeType.Core.Types                               as BM
 import           FreeType.Support.Bitmap                           as BM
 import           FreeType.Support.Bitmap.Internal                  as BM
---import           Graphics.Rendering.FreeType.Internal.Bitmap       as BM
---import           Graphics.Rendering.FreeType.Internal.GlyphMetrics as GM
 import           Linear
 
 import           Typograffiti.GL
@@ -85,10 +83,11 @@ spacing = 1
 measure
   :: FT_Face
   -> Int
+  -> (FT_GlyphSlot -> FreeTypeIO ())
   -> (IntMap AtlasMeasure, AtlasMeasure)
   -> Char
   -> FreeTypeIO (IntMap AtlasMeasure, AtlasMeasure)
-measure fce maxw (prev, am@AM{..}) char
+measure fce maxw glyphCb (prev, am@AM{..}) char
   -- Skip chars that have already been measured
   | fromEnum char `IM.member` prev = return (prev, am)
   | otherwise = do
@@ -96,10 +95,11 @@ measure fce maxw (prev, am@AM{..}) char
         V2 w h = amWH
     -- Load the char, replacing the glyph according to
     -- https://www.freetype.org/freetype2/docs/tutorial/step1.html
-    loadChar fce (fromIntegral $ fromEnum char) ft_LOAD_RENDER
+    loadChar fce (fromIntegral $ fromEnum char) ft_LOAD_DEFAULT
     -- Get the glyph slot
     fce' <- liftIO $ peek fce
     let slot = frGlyph fce'
+    glyphCb slot
     -- Get the bitmap
     slot' <- liftIO $ peek slot
     let bmp =  gsrBitmap slot'
@@ -183,7 +183,7 @@ allocAtlas fontFilePath gs str = do
       GlyphSizeInPixels w h -> setPixelSizes fce w h
       GlyphSizeByChar (CharSize w h dpix dpiy) -> setCharSize fce w h dpix dpiy
 
-    (amMap, am) <- foldM (measure fce 512) (mempty, emptyAM) str
+    (amMap, am) <- foldM (measure fce 512 renderGlyph) (mempty, emptyAM) str
 
     let V2 w h = amWH am
         xymap :: IntMap (V2 Int)
