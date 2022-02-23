@@ -12,6 +12,8 @@ import           Graphics.GL
 import           SDL                    hiding (rotate)
 import           System.FilePath        ((</>))
 
+import           System.Environment
+
 import           Typograffiti
 
 
@@ -19,8 +21,8 @@ myTextStuff
   :: ( MonadIO m
      , MonadError TypograffitiError m
      )
-  => Window -> m ()
-myTextStuff w = do
+  => String -> Window -> m ()
+myTextStuff text w = do
   let ttfName = "assets" </> "Lora-Regular.ttf"
   store <- newDefaultFontStore (get $ windowSize w)
   RenderedText draw size <-
@@ -28,11 +30,7 @@ myTextStuff w = do
       store
       ttfName
       (GlyphSizeInPixels 16 16)
-      $ unlines
-          [ "Hey there!"
-          , "This is a test of the emergency word system."
-          , "Quit at any time."
-          ]
+      text
   liftIO $ print ("text size", size)
 
   fix $ \loop -> do
@@ -55,6 +53,16 @@ main :: IO ()
 main = do
   SDL.initializeAll
 
+  args <- getArgs
+  text <- case args of
+    [] -> return $ unlines
+      [ "Hey there!"
+      , "This is a test of the emergency word system."
+      , "Quite at any time."
+      ]
+    [path] -> readFile path
+    _ -> return "Usage: typograffiti-exe [FILE]"
+
   let openGL = defaultOpenGL
         { glProfile = Core Debug 3 3 }
       wcfg = defaultWindow
@@ -66,5 +74,5 @@ main = do
   w <- createWindow "Typograffiti" wcfg
   _ <- glCreateContext w
 
-  runExceptT (myTextStuff w)
+  runExceptT (myTextStuff text w)
     >>= either (fail . show) return
