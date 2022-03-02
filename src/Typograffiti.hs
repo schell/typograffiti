@@ -13,6 +13,7 @@ module Typograffiti
   , TextRenderingData (..)
   , FontStore
   , newDefaultFontStore
+  , newFontStoreForCharset
   , getTextRendering
   -- * Transforming rendered text
   , TextTransform (..)

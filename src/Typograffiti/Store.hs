@@ -131,6 +131,24 @@ newDefaultFontStore getDims = do
   FontStore
     <$> liftIO (atomically $ newTMVar dat)
 
+newFontStoreForCharset
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     , Integral i
+     )
+  => IO (V2 i)
+  -> String
+  -> m (FontStore [TextTransform])
+newFontStoreForCharset getDims charset = do
+  aw <- makeDefaultAllocateWord getDims
+  let dat = TextRenderingData
+        { textRenderingDataAllocWord = aw
+        , textRenderingDataFontMap   = mempty
+        , textRenderingDataCharSet   = S.fromList charset
+        }
+  FontStore
+    <$> liftIO (atomically $ newTMVar dat)
+
 
 allocFont
   :: ( MonadIO m
