@@ -138,13 +138,15 @@ newFontStoreForCharset
      )
   => IO (V2 i)
   -> String
+  -> Bool -- ^ If True silences errors, rendering Tofu glyphs instead.
   -> m (FontStore [TextTransform])
-newFontStoreForCharset getDims charset = do
+newFontStoreForCharset getDims charset useTofu = do
   aw <- makeDefaultAllocateWord getDims
+  let addTofu = if useTofu then ('\0':) else id
   let dat = TextRenderingData
         { textRenderingDataAllocWord = aw
         , textRenderingDataFontMap   = mempty
-        , textRenderingDataCharSet   = S.fromList charset
+        , textRenderingDataCharSet   = S.fromList $ addTofu charset
         }
   FontStore
     <$> liftIO (atomically $ newTMVar dat)
@@ -192,6 +194,20 @@ registerFont
 -- to being composited into place on the GPU, which is
 -- responsible for ensuring Typograffiti has a bitmap to composite.
 registerFont store key fce sz cb = do
+  s <- liftIO $ atomically $ readTMVar $ unFontStore store
+  registerFontWithCharset store key fce sz cb (textRenderingDataCharSet s) False
+
+registerFontWithCharset
+  :: Layout t
+  => FontStore t
+  -> String
+  -> FT_Face
+  -> Maybe GlyphSize
+  -> (FT_GlyphSlot -> FreeTypeIO ())
+  -> Set Char
+  -> Bool -- ^ If True silences errors, rendering Tofu glyphs instead.
+  -> FreeTypeIO (Font t)
+registerFontWithCharset store key fce sz cb charset useTofu = do
   let mvar = unFontStore store
   s     <- liftIO $ atomically $ takeTMVar mvar
   atlas <-
@@ -200,8 +216,8 @@ registerFont store key fce sz cb = do
       fce
       sz
       cb
-      $ S.toList
-      $ textRenderingDataCharSet s
+      $ (if useTofu then ('\0':) else id)
+      $ S.toList charset
   let fontmap = textRenderingDataFontMap s
       font = Font
         { fontAtlas     = atlas

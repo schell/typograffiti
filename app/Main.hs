@@ -24,7 +24,7 @@ myTextStuff
   => String -> Window -> m ()
 myTextStuff text w = do
   let ttfName = "assets" </> "Lora-Regular.ttf"
-  store <- newFontStoreForCharset (get $ windowSize w) text
+  store <- newFontStoreForCharset (get $ windowSize w) text True
   RenderedText draw size <-
     getTextRendering
       store

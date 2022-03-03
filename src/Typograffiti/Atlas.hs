@@ -276,7 +276,7 @@ makeCharQuad Atlas{..} useKerning penx mLast char = do
         getKerning atlasFontFace lndx ndx ft_KERNING_DEFAULT
       return $ either (const penx) ((+penx) . floor . (* 0.015625) . fromIntegral . fst) e
     _  -> return $ fromIntegral penx
-  case IM.lookup ichar atlasMetrics of
+  case IM.lookup ichar atlasMetrics `orElse` IM.lookup 0 atlasMetrics of
     Nothing -> throwError $ TypograffitiErrorNoGlyphMetricsForChar char
     Just GlyphMetrics{..} -> do
       let V2 dx dy = fromIntegral <$> glyphHoriBearing
@@ -296,6 +296,10 @@ makeCharQuad Atlas{..} useKerning penx mLast char = do
                            ]
       let V2 ax _ = glyphAdvance
       return (vs, px + ax, mndx)
+
+-- Utility function...
+orElse (Just a) _ = Just a
+orElse Nothing x = x
 
 
 -- | A string containing all standard ASCII characters.
