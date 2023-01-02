@@ -3,6 +3,7 @@
 module Graphics.Text.Font.Render where
 
 import           Data.Map (Map)
+import           Data.Int (Int32)
 import           Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
 import           Linear.V2 (V2(..))
@@ -10,6 +11,7 @@ import           Linear.V (toV, dim, Finite, Size)
 import           FreeType.Core.Base (FT_Library, FT_Face,
                                     FT_GlyphSlotRec(..), FT_Glyph_Metrics(..))
 import           FreeType.Core.Types (FT_Bitmap(..))
+import           Data.Text.Glyphize (GlyphInfo(..), GlyphPos(..))
 
 import           Graphics.GL as GL
 import qualified Graphics.GL.Core32 as GL
@@ -34,10 +36,7 @@ import qualified Data.Vector.Unboxed    as UV
 data GlyphMetrics = GlyphMetrics {
     glyphTexBB :: (V2 Int, V2 Int),
     glyphTexSize :: V2 Int,
-    glyphSize :: V2 Int,
-    glyphHoriBearing :: V2 Int,
-    glyphVertBearing :: V2 Int,
-    glyphAdvance :: V2 Int
+    glyphSize :: V2 Int
 } deriving (Show, Eq)
 
 data Atlas = Atlas {
@@ -62,7 +61,7 @@ emptyAM = AM 0 (V2 1 1) 0 mempty
 spacing :: Int
 spacing = 1
 
-measure cb maxw am@AM{..} glyph
+measure cb maxw am@AM{..} (GlyphInfo {codepoint = glyph}, _)
     | Just _ <- IM.lookup (fromEnum glyph) amMap = return am
     | otherwise = do
         let V2 x y = amXY
@@ -84,7 +83,7 @@ measure cb maxw am@AM{..} glyph
               }
         return am
 
-texturize cb xymap atlas@Atlas{..} glyph
+texturize cb xymap atlas@Atlas{..} (GlyphInfo {codepoint = glyph}, _)
     | Just pos@(V2 x y) <- IM.lookup (fromIntegral $ fromEnum glyph) xymap = do
         (bmp, metrics) <- cb glyph
         glTexSubImage2D GL.GL_TEXTURE_2D 0
@@ -101,10 +100,7 @@ texturize cb xymap atlas@Atlas{..} glyph
             mtrcs = GlyphMetrics {
                 glyphTexBB = (pos, pos + vecwh),
                 glyphTexSize = vecwh,
-                glyphSize = vecsz,
-                glyphHoriBearing = vecxb,
-                glyphVertBearing = vecyb,
-                glyphAdvance = vecad
+                glyphSize = vecsz
               }
         return atlas { atlasMetrics = IM.insert (fromEnum glyph) mtrcs atlasMetrics }
     | otherwise = do
@@ -139,34 +135,45 @@ allocAtlas cb glyphs = do
 
 freeAtlas a = with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
 
-makeCharQuad Atlas {..} (penx, mLast) glyph = do
+type Quads = (Float, Float, [(V2 Float, V2 Float)])
+makeCharQuad :: Atlas -> Quads -> (GlyphInfo, GlyphPos) -> IO Quads
+makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphPos {..}) = do
     let iglyph = fromEnum glyph
     case IM.lookup iglyph atlasMetrics of
-        Nothing -> return (penx, mLast)
+        Nothing -> return (penx, peny, mLast)
         Just GlyphMetrics {..} -> do
-            -- TODO incorporate Harfbuzz positioning.
-            let V2 dx dy = fromIntegral <$> glyphHoriBearing
-                x = (fromIntegral penx) + dx
-                y = -dy
-                V2 w h = fromIntegral <$> glyphSize
-                V2 aszW aszH = fromIntegral <$> atlasTextureSize
-                V2 texL texT = fromIntegral <$> fst glyphTexBB
-                V2 texR texB = fromIntegral <$> snd glyphTexBB
+            let x = penx + f x_offset
+                y = peny + f y_offset
+                V2 w h = f' <$> glyphSize
+                V2 aszW aszH = f' <$> atlasTextureSize
+                V2 texL texT = f' <$> fst glyphTexBB
+                V2 texR texB = f' <$> snd glyphTexBB
 
                 tl = (V2 (x) y, V2 (texL/aszW) (texT/aszH))
                 tr = (V2 (x+w) y, V2 (texR/aszW) (texT/aszH))
                 br = (V2 (x+w) (y+h), V2 (texR/aszW) (texB/aszH))
                 bl = (V2 (x) (y+h), V2 (texL/aszW) (texB/aszH))
-            let V2 ax _ = glyphAdvance
 
-            return (penx + ax, mLast ++ [tl, tr, br, tl, br, bl])
+            return (penx + f x_advance, peny + f y_advance,
+                    mLast ++ [tl, tr, br, tl, br, bl])
+  where
+    f :: Int32 -> Float
+    f = fromIntegral
+    f' :: Int -> Float
+    f' = fromIntegral
 
-stringTris atlas = foldM (makeCharQuad atlas) (0, [])
+stringTris :: Atlas -> [(GlyphInfo, GlyphPos)] -> IO Quads
+stringTris atlas = foldM (makeCharQuad atlas) (0, 0, [])
+stringTris' :: Atlas -> [(GlyphInfo, GlyphPos)] -> IO [(V2 Float, V2 Float)]
+stringTris' atlas glyphs = do
+    (_, _, ret) <- stringTris atlas glyphs
+    return ret
 
+drawGlyphs :: Atlas -> [(GlyphInfo, GlyphPos)] -> IO ()
 drawGlyphs atlas@Atlas {..} glyphs = do
     glBindTexture GL.GL_TEXTURE_2D atlasTexture
 
-    (geom', texcoords') <- unzip <$> snd <$> stringTris atlas glyphs
+    (geom', texcoords') <- unzip <$> stringTris' atlas glyphs
     geom <- newBuffer
     texcoords <- newBuffer
     bufferGeometry 0 geom $ UV.fromList geom'
@@ -177,6 +184,7 @@ drawGlyphs atlas@Atlas {..} glyphs = do
 --- OpenGL Utilities
 ------
 
+newBuffer :: IO GLuint
 newBuffer = do
   [b] <- allocaArray 1 $ \ptr -> do
     glGenBuffers 1 ptr

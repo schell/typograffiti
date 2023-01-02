@@ -60,7 +60,7 @@ library
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
-  build-depends:       base >=4.12 && <4.13, linear, containers, freetype2, gl, vector
+  build-depends:       base >=4.12 && <4.13, linear, containers, freetype2, gl, vector, harfbuzz-pure
 
   -- Directories containing source files.
   hs-source-dirs:      src
