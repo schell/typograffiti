@@ -1,5 +1,5 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE RecordWildCards, LambdaCase #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances #-}
 module Graphics.Text.Font.Render where
 
 import           Data.Map (Map)
@@ -16,13 +16,22 @@ import           Data.Text.Glyphize (GlyphInfo(..), GlyphPos(..))
 import           Graphics.GL as GL
 import qualified Graphics.GL.Core32 as GL
 import           Control.Monad (foldM, when)
-import           Control.Exception (assert)
+import           Control.Exception (assert, Exception)
 import qualified Data.Foldable          as F
 import           GHC.TypeNats (KnownNat)
+import           Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as B8
+
+import Linear.V3 (V3(..))
+import Linear.V4 (V4(..))
+import Linear.Matrix (M44, (!*!), identity, mkTransformationMat, mkTransformation)
+import Linear.Quaternion (axisAngle)
+import Linear.Projection (ortho)
+import Data.List (foldl')
 
 import           Foreign.Ptr (castPtr, nullPtr)
-import           Foreign.C.String (withCString)
-import           Foreign.Marshal.Array (peekArray, allocaArray)
+import           Foreign.C.String (withCString, peekCAStringLen)
+import           Foreign.Marshal.Array (peekArray, allocaArray, withArray)
 import           Foreign.Marshal.Utils (with)
 import           Foreign.Storable (Storable(..))
 import qualified Data.Vector.Storable   as SV
@@ -169,16 +178,125 @@ stringTris' atlas glyphs = do
     (_, _, ret) <- stringTris atlas glyphs
     return ret
 
-drawGlyphs :: Atlas -> [(GlyphInfo, GlyphPos)] -> IO ()
-drawGlyphs atlas@Atlas {..} glyphs = do
-    glBindTexture GL.GL_TEXTURE_2D atlasTexture
+makeDrawGlyphs getContextSize = do
+    let position = 0
+        uv = 1
+    vert <- liftGL $ compileOGLShader vertexShader GL_VERTEX_SHADER
+    frag <- liftGL $ compileOGLShader fragmentShader GL_FRAGMENT_SHADER
+    prog <- liftGL $ compileOGLProgram [
+        ("position", fromIntegral position),
+        ("uv", fromIntegral uv)
+      ] [vert, frag]
+    glUseProgram prog
+    glEnable GL_BLEND
+    glBlendFunc GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA
+    -- Get uniform locations
+    pjU   <- getUniformLocation prog "projection"
+    mvU   <- getUniformLocation prog "modelview"
+    multU <- getUniformLocation prog "mult_color"
+    texU  <- getUniformLocation prog "tex"
+    return $ \atlas glyphs -> do
+        vao   <- newBoundVAO
+        pbuf  <- newBuffer
+        uvbuf <- newBuffer
+        (ps, uvs) <- unzip <$> stringTris' atlas glyphs
+        bufferGeometry position pbuf $ UV.fromList ps
+        bufferGeometry uv uvbuf $ UV.fromList uvs
+        glBindVertexArray 0
 
-    (geom', texcoords') <- unzip <$> stringTris' atlas glyphs
-    geom <- newBuffer
-    texcoords <- newBuffer
-    bufferGeometry 0 geom $ UV.fromList geom'
-    bufferGeometry 1 texcoords $ UV.fromList texcoords'
-    glDrawArrays GL.GL_TRIANGLES 0 $ toEnum $ SV.length $ convertVec $ UV.fromList geom'
+        let draw ts = do
+                let (mv, multVal) = transformToUniforms ts
+                glUseProgram prog
+                wsz <- getContextSize
+                let pj = orthoProjection wsz
+                updateUniform prog pjU pj
+                updateUniform prog mvU mv
+                updateUniform prog multU multVal
+                updateUniform prog texU (0 :: Int)
+                glBindVertexArray vao
+                withBoundTextures [atlasTexture atlas] $ do
+                    drawVAO prog vao GL_TRIANGLES (fromIntegral $ length ps)
+                    glBindVertexArray 0
+            release = do
+                withArray [pbuf, uvbuf] $ glDeleteBuffers 2
+                withArray [vao] $ glDeleteVertexArrays 1
+            (tl, br) = boundingBox ps
+            size = br - tl
+        return ()
+
+vertexShader :: ByteString
+vertexShader = B8.pack $ unlines
+  [ "#version 330 core"
+  , "uniform mat4 projection;"
+  , "uniform mat4 modelview;"
+  , "in vec2 position;"
+  , "in vec2 uv;"
+  , "out vec2 fuv;"
+  , "void main () {"
+  , "  fuv = uv;"
+  , "  gl_Position = projection * modelview * vec4(position.xy, 0.0, 1.0);"
+  , "}"
+  ]
+
+fragmentShader :: ByteString
+fragmentShader = B8.pack $ unlines
+  [ "#version 330 core"
+  , "in vec2 fuv;"
+  , "out vec4 fcolor;"
+  , "uniform sampler2D tex;"
+  , "uniform vec4 mult_color;"
+  , "void main () {"
+  , "  vec4 tcolor = texture(tex, fuv);"
+  , "  fcolor = vec4(mult_color.rgb, mult_color.a * tcolor.r);"
+  , "}"
+  ]
+
+
+------
+--- Transforms
+------
+
+data SpatialTransform = SpatialTransformTranslate (V2 Float)
+                      | SpatialTransformScale (V2 Float)
+                      | SpatialTransformRotate Float
+
+
+data TextTransform = TextTransformMultiply (V4 Float)
+                   | TextTransformSpatial SpatialTransform
+
+
+transformToUniforms :: [TextTransform] -> (M44 Float, V4 Float)
+transformToUniforms = foldl toUniform (identity, 1.0)
+  where toUniform (mv, clr) (TextTransformMultiply c) =
+          (mv, clr * c)
+        toUniform (mv, clr) (TextTransformSpatial s) =
+          let mv1 = case s of
+                SpatialTransformTranslate (V2 x y) ->
+                  mv !*! mat4Translate (V3 x y 0)
+                SpatialTransformScale (V2 x y) ->
+                  mv !*! mat4Scale (V3 x y 1)
+                SpatialTransformRotate r ->
+                  mv !*! mat4Rotate r (V3 0 0 1)
+          in (mv1, clr)
+
+mat4Translate :: Num a => V3 a -> M44 a
+mat4Translate = mkTransformationMat identity
+
+mat4Rotate phi v = mkTransformation (axisAngle v phi) (V3 0 0 0)
+
+
+mat4Scale :: Num a => V3 a -> M44 a
+mat4Scale (V3 x y z) =
+    V4 (V4 x 0 0 0)
+       (V4 0 y 0 0)
+       (V4 0 0 z 0)
+       (V4 0 0 0 1)
+
+orthoProjection :: Integral a => V2 a -> M44 Float
+orthoProjection (V2 ww wh) =
+  let (hw,hh) = (fromIntegral ww, fromIntegral wh)
+  in ortho 0 hw hh 0 0 1
+
 
 ------
 --- OpenGL Utilities
@@ -230,3 +348,220 @@ clearErrors str = do
   when (err' /= 0) $ do
     putStrLn $ unwords [str, show err']
     assert False $ return ()
+
+compileOGLShader
+  :: ByteString
+     -- ^ The shader source
+  -> GLenum
+  -- ^ The shader type (vertex, frag, etc)
+  -> IO (Either String GLuint)
+  -- ^ Either an error message or the generated shader handle.
+compileOGLShader src shType = do
+  shader <- glCreateShader shType
+  if shader == 0
+    then return $ Left "Could not create shader"
+    else do
+      success <- do
+        withCString (B8.unpack src) $ \ptr ->
+          with ptr $ \ptrptr -> glShaderSource shader 1 ptrptr nullPtr
+
+        glCompileShader shader
+        with (0 :: GLint) $ \ptr -> do
+          glGetShaderiv shader GL_COMPILE_STATUS ptr
+          peek ptr
+
+      if success == GL_FALSE
+        then do
+          err <- do
+            infoLog <- with (0 :: GLint) $ \ptr -> do
+                glGetShaderiv shader GL_INFO_LOG_LENGTH ptr
+                logsize <- peek ptr
+                allocaArray (fromIntegral logsize) $ \logptr -> do
+                    glGetShaderInfoLog shader logsize nullPtr logptr
+                    peekArray (fromIntegral logsize) logptr
+
+            return $ unlines [ "Could not compile shader:"
+                             , B8.unpack src
+                             , map (toEnum . fromEnum) infoLog
+                             ]
+          return $ Left err
+        else return $ Right shader
+
+compileOGLProgram
+  :: [(String, Integer)]
+  -> [GLuint]
+  -> IO (Either String GLuint)
+compileOGLProgram attribs shaders = do
+  (program, success) <- do
+     program <- glCreateProgram
+     F.forM_ shaders (glAttachShader program)
+     F.forM_ attribs
+       $ \(name, loc) ->
+         withCString name
+           $ glBindAttribLocation program
+           $ fromIntegral loc
+     glLinkProgram program
+
+     success <- with (0 :: GLint) $ \ptr -> do
+       glGetProgramiv program GL_LINK_STATUS ptr
+       peek ptr
+     return (program, success)
+
+  if success == GL_FALSE
+  then with (0 :: GLint) $ \ptr -> do
+    glGetProgramiv program GL_INFO_LOG_LENGTH ptr
+    logsize <- peek ptr
+    infoLog <- allocaArray (fromIntegral logsize) $ \logptr -> do
+      glGetProgramInfoLog program logsize nullPtr logptr
+      peekArray (fromIntegral logsize) logptr
+    return
+      $ Left
+      $ unlines
+          [ "Could not link program"
+          , map (toEnum . fromEnum) infoLog
+          ]
+  else do
+    F.forM_ shaders glDeleteShader
+    return $ Right program
+
+newBoundVAO :: IO GLuint
+newBoundVAO = do
+  [vao] <- allocaArray 1 $ \ptr -> do
+      glGenVertexArrays 1 ptr
+      peekArray 1 ptr
+  glBindVertexArray vao
+  return vao
+
+drawVAO
+  :: GLuint
+  -- ^ The program
+  -> GLuint
+  -- ^ The vao
+  -> GLenum
+  -- ^ The draw mode
+  -> GLsizei
+  -- ^ The number of vertices to draw
+  -> IO ()
+drawVAO program vao mode num = do
+  glUseProgram program
+  glBindVertexArray vao
+  clearErrors "drawBuffer:glBindVertex"
+  glDrawArrays mode 0 num
+  clearErrors "drawBuffer:glDrawArrays"
+
+withBoundTextures :: [GLuint] -> IO a -> IO a
+withBoundTextures ts f = do
+  mapM_ (uncurry bindTex) (zip ts [GL_TEXTURE0 ..])
+  a <- f
+  glBindTexture GL_TEXTURE_2D 0
+  return a
+  where bindTex tex u = glActiveTexture u >> glBindTexture GL_TEXTURE_2D tex
+
+
+---
+
+getUniformLocation :: GLuint -> String -> IO GLint
+getUniformLocation program ident = withCString ident $ glGetUniformLocation program
+
+class UniformValue a where
+  updateUniform
+    :: GLuint
+    -- ^ The program
+    -> GLint
+    -- ^ The uniform location
+    -> a
+    -- ^ The value.
+    -> IO ()
+
+clearUniformUpdateError :: Show a => GLuint -> GLint -> a -> IO ()
+clearUniformUpdateError prog loc val = glGetError >>= \case
+  0 -> return ()
+  e -> do
+    let buf = replicate 256 ' '
+    ident <- withCString buf
+      $ \strptr -> with 0
+      $ \szptr  -> do
+        glGetActiveUniformName prog (fromIntegral loc) 256 szptr strptr
+        sz <- peek szptr
+        peekCAStringLen (strptr, fromIntegral sz)
+    putStrLn $ unwords
+      [ "Could not update uniform"
+      , ident
+      , "with value"
+      , show val
+      , ", encountered error (" ++ show e ++ ")"
+      , show (GL_INVALID_OPERATION :: Integer, "invalid operation" :: String)
+      , show (GL_INVALID_VALUE :: Integer, "invalid value" :: String)
+      ]
+    assert False $ return ()
+
+
+instance UniformValue Bool where
+  updateUniform p loc bool = do
+    glUniform1i loc $ if bool then 1 else 0
+    clearUniformUpdateError p loc bool
+
+instance UniformValue Int where
+  updateUniform p loc enum = do
+    glUniform1i loc $ fromIntegral $ fromEnum enum
+    clearUniformUpdateError p loc enum
+
+instance UniformValue Float where
+  updateUniform p loc float = do
+    glUniform1f loc $ realToFrac float
+    clearUniformUpdateError p loc float
+
+instance UniformValue Double where
+  updateUniform p loc d = do
+    glUniform1f loc $ realToFrac d
+    clearUniformUpdateError p loc d
+
+instance UniformValue (V2 Float) where
+  updateUniform p loc v = do
+    let V2 x y = fmap realToFrac v
+    glUniform2f loc x y
+    clearUniformUpdateError p loc v
+
+instance UniformValue (V3 Float) where
+  updateUniform p loc v = do
+    let V3 x y z = fmap realToFrac v
+    glUniform3f loc x y z
+    clearUniformUpdateError p loc v
+
+instance UniformValue (V4 Float) where
+  updateUniform p loc v = do
+    let (V4 r g b a) = realToFrac <$> v
+    glUniform4f loc r g b a
+    clearUniformUpdateError p loc v
+
+instance UniformValue (M44 Float) where
+  updateUniform p loc val = do
+    with val $ glUniformMatrix4fv loc 1 GL_TRUE . castPtr
+    clearUniformUpdateError p loc val
+
+instance UniformValue (V2 Int) where
+  updateUniform p loc v =  do
+    let V2 x y = fmap fromIntegral v
+    glUniform2i loc x y
+    clearUniformUpdateError p loc v
+
+instance UniformValue (Int,Int) where
+  updateUniform p loc = updateUniform p loc . uncurry V2
+
+liftGL
+  :: IO (Either String a)
+  -> IO a
+liftGL n = do
+  let lft (Left msg) = error msg
+      lft (Right a) = return a
+  n >>= lft
+
+boundingBox [] = (0,0)
+boundingBox vs = foldl' f (br,tl) vs
+  where mn a = min a . realToFrac
+        mx a = max a . realToFrac
+        f (a, b) c = (mn <$> a <*> c, mx <$> b <*> c)
+        inf = 1/0
+        ninf = (-1)/0
+        tl = V2 ninf ninf
+        br = V2 inf inf
