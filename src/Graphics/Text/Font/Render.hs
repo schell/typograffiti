@@ -6,12 +6,15 @@ import           Data.Map (Map)
 import           Data.Int (Int32)
 import           Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
+import qualified Data.IntSet as IS
 import           Linear.V2 (V2(..))
 import           Linear.V (toV, dim, Finite, Size)
-import           FreeType.Core.Base (FT_Library, FT_Face,
+import           FreeType.Core.Base (FT_Library, FT_Face, FT_FaceRec(..), ft_Load_Glyph,
                                     FT_GlyphSlotRec(..), FT_Glyph_Metrics(..))
+import qualified FreeType.Core.Base as FT
 import           FreeType.Core.Types (FT_Bitmap(..))
-import           Data.Text.Glyphize (GlyphInfo(..), GlyphPos(..))
+import           Data.Text.Glyphize (GlyphInfo(..), GlyphPos(..),
+                                    shape, Buffer(..), defaultBuffer, ftCreateFont)
 
 import           Graphics.GL as GL
 import qualified Graphics.GL.Core32 as GL
@@ -70,7 +73,13 @@ emptyAM = AM 0 (V2 1 1) 0 mempty
 spacing :: Int
 spacing = 1
 
-measure cb maxw am@AM{..} (GlyphInfo {codepoint = glyph}, _)
+glyphRetriever font glyph = do
+    ft_Load_Glyph font (fromIntegral $ fromEnum glyph) FT.FT_LOAD_RENDER
+    font' <- peek font
+    slot <- peek $ frGlyph font'
+    return (gsrBitmap slot, gsrMetrics slot)
+
+measure cb maxw am@AM{..} glyph
     | Just _ <- IM.lookup (fromEnum glyph) amMap = return am
     | otherwise = do
         let V2 x y = amXY
@@ -92,7 +101,7 @@ measure cb maxw am@AM{..} (GlyphInfo {codepoint = glyph}, _)
               }
         return am
 
-texturize cb xymap atlas@Atlas{..} (GlyphInfo {codepoint = glyph}, _)
+texturize cb xymap atlas@Atlas{..} glyph
     | Just pos@(V2 x y) <- IM.lookup (fromIntegral $ fromEnum glyph) xymap = do
         (bmp, metrics) <- cb glyph
         glTexSubImage2D GL.GL_TEXTURE_2D 0
@@ -116,6 +125,7 @@ texturize cb xymap atlas@Atlas{..} (GlyphInfo {codepoint = glyph}, _)
         putStrLn ("Cound not find glyph " ++ show glyph)
         return atlas
 
+allocAtlas :: (Int32 -> IO (FT_Bitmap, FT_Glyph_Metrics)) -> [Int32] -> IO Atlas
 allocAtlas cb glyphs = do
     AM {..} <- foldM (measure cb 512) emptyAM glyphs
     let V2 w h = amWH
@@ -565,3 +575,18 @@ boundingBox vs = foldl' f (br,tl) vs
         ninf = (-1)/0
         tl = V2 ninf ninf
         br = V2 inf inf
+
+------
+--- Simple API (Abstracting Harfbuzz)
+------
+
+makeDrawText font features sampletext getContextSize = do
+    font' <- ftCreateFont font
+    let glyphs = map (codepoint . fst) $
+            shape font' defaultBuffer { text = sampletext } features
+    let glyphs' = map toEnum $ IS.toList $ IS.fromList $ map fromEnum glyphs
+    atlas <- allocAtlas (glyphRetriever font) glyphs'
+
+    drawGlyphs <- makeDrawGlyphs getContextSize
+    return $ \string ->
+        drawGlyphs atlas $ shape font' defaultBuffer { text = string } features
