@@ -10,11 +10,14 @@ import qualified Data.IntSet as IS
 import           Linear.V2 (V2(..))
 import           Linear.V (toV, dim, Finite, Size)
 import           FreeType.Core.Base (FT_Library, FT_Face, FT_FaceRec(..), ft_Load_Glyph,
-                                    FT_GlyphSlotRec(..), FT_Glyph_Metrics(..))
+                                    FT_GlyphSlotRec(..), FT_Glyph_Metrics(..),
+                                    ft_Set_Pixel_Sizes, ft_Set_Char_Size, ft_New_Face,
+                                    ft_With_FreeType, ft_Reference_Face, ft_Done_Face)
 import qualified FreeType.Core.Base as FT
 import           FreeType.Core.Types (FT_Bitmap(..))
 import           Data.Text.Glyphize (GlyphInfo(..), GlyphPos(..),
-                                    shape, Buffer(..), defaultBuffer, ftCreateFont)
+                                    shape, Buffer(..), defaultBuffer,
+                                    createFace, createFont)
 
 import           Graphics.GL as GL
 import qualified Graphics.GL.Core32 as GL
@@ -24,6 +27,7 @@ import qualified Data.Foldable          as F
 import           GHC.TypeNats (KnownNat)
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
+import qualified Data.ByteString as B
 
 import Linear.V3 (V3(..))
 import Linear.V4 (V4(..))
@@ -34,6 +38,7 @@ import Data.List (foldl')
 
 import           Foreign.Ptr (castPtr, nullPtr)
 import           Foreign.C.String (withCString, peekCAStringLen)
+import           Foreign.C.Types (CInt)
 import           Foreign.Marshal.Array (peekArray, allocaArray, withArray)
 import           Foreign.Marshal.Utils (with)
 import           Foreign.Storable (Storable(..))
@@ -56,7 +61,7 @@ data Atlas = Atlas {
     atlasTextureSize :: V2 Int,
     atlasMetrics :: IntMap GlyphMetrics,
     atlasFilePath :: FilePath
-}
+} deriving (Show)
 
 emptyAtlas t = Atlas t 0 mempty ""
 
@@ -168,12 +173,12 @@ makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphP
                 V2 texL texT = f' <$> fst glyphTexBB
                 V2 texR texB = f' <$> snd glyphTexBB
 
-                tl = (V2 (x) y, V2 (texL/aszW) (texT/aszH))
-                tr = (V2 (x+w) y, V2 (texR/aszW) (texT/aszH))
-                br = (V2 (x+w) (y+h), V2 (texR/aszW) (texB/aszH))
-                bl = (V2 (x) (y+h), V2 (texL/aszW) (texB/aszH))
+                tl = (V2 (x) (y-h), V2 (texL/aszW) (texT/aszH))
+                tr = (V2 (x+w) (y-h), V2 (texR/aszW) (texT/aszH))
+                br = (V2 (x+w) y, V2 (texR/aszW) (texB/aszH))
+                bl = (V2 (x) y, V2 (texL/aszW) (texB/aszH))
 
-            return (penx + f x_advance, peny + f y_advance,
+            return (penx + f x_advance/150, peny + f y_advance/150,
                     mLast ++ [tl, tr, br, tl, br, bl])
   where
     f :: Int32 -> Float
@@ -188,7 +193,16 @@ stringTris' atlas glyphs = do
     (_, _, ret) <- stringTris atlas glyphs
     return ret
 
-makeDrawGlyphs getContextSize = do
+data AllocatedRendering t = AllocatedRendering
+  { arDraw    :: t -> V2 CInt -> IO ()
+    -- ^ Draw the text with some transformation in some monad.
+  , arRelease :: IO ()
+    -- ^ Release the allocated draw function in some monad.
+  , arSize    :: V2 Int
+    -- ^ The size (in pixels) of the drawn text.
+  }
+
+makeDrawGlyphs = do
     let position = 0
         uv = 1
     vert <- liftGL $ compileOGLShader vertexShader GL_VERTEX_SHADER
@@ -214,10 +228,9 @@ makeDrawGlyphs getContextSize = do
         bufferGeometry uv uvbuf $ UV.fromList uvs
         glBindVertexArray 0
 
-        let draw ts = do
+        let draw ts wsz = do
                 let (mv, multVal) = transformToUniforms ts
                 glUseProgram prog
-                wsz <- getContextSize
                 let pj = orthoProjection wsz
                 updateUniform prog pjU pj
                 updateUniform prog mvU mv
@@ -232,7 +245,11 @@ makeDrawGlyphs getContextSize = do
                 withArray [vao] $ glDeleteVertexArrays 1
             (tl, br) = boundingBox ps
             size = br - tl
-        return ()
+        return AllocatedRendering {
+            arDraw = draw,
+            arRelease = release,
+            arSize = round <$> size
+          }
 
 vertexShader :: ByteString
 vertexShader = B8.pack $ unlines
@@ -580,13 +597,29 @@ boundingBox vs = foldl' f (br,tl) vs
 --- Simple API (Abstracting Harfbuzz)
 ------
 
-makeDrawText font features sampletext getContextSize = do
-    font' <- ftCreateFont font
+data GlyphSize = CharSize Float Float Int Int
+               | PixelSize Int Int
+               deriving (Show, Eq, Ord)
+
+makeDrawText lib filepath index fontsize features sampletext = do
+    font <- ft_New_Face lib filepath index
+    case fontsize of
+        PixelSize w h -> ft_Set_Pixel_Sizes font (toEnum $ x2 w) (toEnum $ x2 h)
+        CharSize w h dpix dpiy -> ft_Set_Char_Size font (floor $ 26.6 * 2 * w)
+                                                    (floor $ 26.6 * 2 * h)
+                                                    (toEnum dpix) (toEnum dpiy)
+
+    bytes <- B.readFile filepath
+    let font' = createFont $ createFace bytes $ toEnum $ fromEnum index
     let glyphs = map (codepoint . fst) $
             shape font' defaultBuffer { text = sampletext } features
     let glyphs' = map toEnum $ IS.toList $ IS.fromList $ map fromEnum glyphs
     atlas <- allocAtlas (glyphRetriever font) glyphs'
+    ft_Done_Face font
 
-    drawGlyphs <- makeDrawGlyphs getContextSize
+    drawGlyphs <- makeDrawGlyphs
     return $ \string ->
         drawGlyphs atlas $ shape font' defaultBuffer { text = string } features
+  where x2 = (*2)
+
+makeDrawText' a b c d e = ft_With_FreeType $ \ft -> makeDrawText ft a b c d e
