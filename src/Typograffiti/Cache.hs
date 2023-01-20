@@ -35,8 +35,8 @@ import           Typograffiti.Atlas
 import           Typograffiti.GL
 import           Typograffiti.Glyph
 
-data AllocatedRendering t = AllocatedRendering
-  { arDraw    :: t -> V2 CInt -> IO ()
+data AllocatedRendering = AllocatedRendering
+  { arDraw    :: [TextTransform] -> V2 CInt -> IO ()
     -- ^ Draw the text with some transformation in some monad.
   , arRelease :: IO ()
     -- ^ Release the allocated draw function in some monad.

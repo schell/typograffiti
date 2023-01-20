@@ -59,14 +59,14 @@ makeDrawTextIndented lib filepath index fontsize features sampletext indent = do
     ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
-    return $ drawLinesWrapper $ \string ->
+    return $ drawLinesWrapper indent $ \string ->
         drawGlyphs atlas $ shape font' defaultBuffer { text = string } features
   where x2 = (*2)
 
 makeDrawTextIndented' a b c d e f =
-    ft_With_FreeType $ \ft -> makeDrawText ft a b c d e f
+    ft_With_FreeType $ \ft -> makeDrawTextIndented ft a b c d e f
 
-makeDrawText a b c d e f = makeDrawTextIndented a b c d e f
+makeDrawText a b c d e f = makeDrawTextIndented a b c d e f 4
 makeDrawText' a b c d e = ft_With_FreeType $ \ft -> makeDrawText ft a b c d e
 
 -- Note: May glitch upon ligatures.
@@ -109,3 +109,66 @@ drawLinesWrapper indent cb string = do
 --- Key by filepath & index
 --- Maps to Harfbuzz & FreeType fonts,
 --- as well as a list of atlases associated with glyphsets & fontfeatures.
+
+data FontStore = FontStore {
+    fontMap :: TMVar (Map (FilePath, GlyphSize, Int) Font),
+    drawGlyphs :: Atlas -> [(GlyphInfo, GlyphPos)] -> IO AllocatedRendering
+    lib :: FT_Library
+  }
+data Font = Font {
+    harfbuzz :: HB.Font,
+    freetype :: FT_Font,
+    atlases :: TMVar [(IS.IntSet, Atlas)],
+  }
+
+makeDrawTextIndentedCached store filepath index fontsize features sampletext indent = do
+    s <- liftIO $ atomically $ readTMVar $ fontMap store
+    font <- case M.lookup (filepath, fontsize, index) a of
+        Nothing -> allocFont store filepath index fontsize
+        Just font -> return font
+
+    let glyphs = map (codepoint . fst) $
+            shape (harfbuzz font) defaultBuffer { text = sampletext } features
+    let glyphset = IS.fromList $ map fromEnum glyphs
+
+    a <- liftIO $ atomically $ readTMVar $ atlases font
+    atlas <- case [a' | (gs, a') <- a, glyphset `IS.isSubsetOf` gs] of
+        (atlas:_) -> return atlas
+        _ -> allocAtlas (atlases font) (freetype font) glyphset
+
+    return $ drawLinesWrapper indent $ \string ->
+        drawGlyphs store atlas $ shape font' defaultBuffer { text = string } features
+
+allocFont FontStore {..} filepath index fontsize = do
+    font <- ft_New_Face lib filepath index
+    case fontsize of
+        PixelSize w h -> ft_Set_Pixel_Sizes font (toEnum $ x2 w) (toEnum $ x2 h)
+        CharSize w h dpix dpiy -> ft_Set_Char_Size font (floor $ 26.6 * 2 * w)
+                                                    (floor $ 26.6 * 2 * h)
+                                                    (toEnum dpix) (toEnum dpiy)
+
+    bytes <- B.readFile filepath
+    let font' = createFont $ createFace bytes $ toEnum $ fromEnum index
+
+    atlases <- liftIO $ atomically $ newTMVar []
+    let ret = Font font' font atlases
+    liftIO $ atomically $ swapTMVar $ M.insert (filepath, fontsize, index) ret
+    return ret
+
+allocAtlas atlases font glyphset = do
+    let glyphs = map toEnum $ IS.toList glyphset
+    atlas <- allocAtlas (glyphRetriever font) glyphs
+
+    liftIO $ atomically $ swapTMVar atlases $ ((glyphset, atlas):)
+    return atlas
+
+withFontStore cb = ft_With_FreeType $ \lib -> do
+    store <- liftIO $ atomically $ newTMVar M.empty
+    drawGlyphs <- makeDrawGlyphs
+
+    cb $ FontStore store drawGlyphs lib
+
+makeDrawTextCached a b c d e f = makeDrawTextIndentedCached a b c d e f 4
+makeDrawAsciiIndentedCached a b c d e f =
+    makeDrawTextIndentedCached a b c d e (map toEnum [32..126]) f
+makeDrawAsciiCached a b c d e = makeDrawTextCached a b c d e $ map toEnum [32..126]
