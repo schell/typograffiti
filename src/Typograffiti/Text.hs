@@ -119,7 +119,7 @@ drawLinesWrapper indent cb string features = do
                 HB.featEnd = min (toEnum n) (end - offset)
               }
             | feat@HB.Feature {HB.featStart = start, HB.featEnd = end} <- features',
-            fromEnum end <= n && end >= offset] :
+            fromEnum end <= n + fromEnum offset && end >= offset] :
             splitFeatures (offset + toEnum n) features' lines'
 
     processLine "" = " " -- enforce nonempty
