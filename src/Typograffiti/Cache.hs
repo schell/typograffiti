@@ -80,9 +80,9 @@ makeDrawGlyphs = do
         vao   <- newBoundVAO
         pbuf  <- newBuffer
         uvbuf <- newBuffer
-        (ps, uvs) <- unzip <$> stringTris' atlas glyphs
-        bufferGeometry position pbuf $ UV.fromList ps
-        bufferGeometry uv uvbuf $ UV.fromList uvs
+        (ps, uvs) <- UV.unzip <$> stringTris' atlas glyphs
+        bufferGeometry position pbuf ps
+        bufferGeometry uv uvbuf uvs
         glBindVertexArray 0
 
         let draw ts wsz = do
@@ -95,7 +95,7 @@ makeDrawGlyphs = do
                 updateUniform prog texU (0 :: Int)
                 glBindVertexArray vao
                 withBoundTextures [atlasTexture atlas] $ do
-                    drawVAO prog vao GL_TRIANGLES (fromIntegral $ length ps)
+                    drawVAO prog vao GL_TRIANGLES (fromIntegral $ UV.length ps)
                     glBindVertexArray 0
             release = do
                 withArray [pbuf, uvbuf] $ glDeleteBuffers 2

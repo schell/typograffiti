@@ -165,7 +165,7 @@ allocAtlas cb glyphs = do
 freeAtlas :: MonadIO m => Atlas -> m ()
 freeAtlas a = liftIO $ with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
 
-type Quads = (Float, Float, [(V2 Float, V2 Float)])
+type Quads = (Float, Float, [Vector (V2 Float, V2 Float)])
 makeCharQuad :: (MonadIO m, MonadError TypograffitiError m) =>
     Atlas -> Quads -> (GlyphInfo, GlyphPos) -> m Quads
 makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphPos {..}) = do
@@ -186,7 +186,7 @@ makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphP
                 bl = (V2 (x) y, V2 (texL/aszW) (texB/aszH))
 
             return (penx + f x_advance/150, peny + f y_advance/150,
-                    mLast ++ [tl, tr, br, tl, br, bl])
+                    UV.fromList [tl, tr, br, tl, br, bl] : mLast)
   where
     f :: Int32 -> Float
     f = fromIntegral
@@ -197,7 +197,7 @@ stringTris :: (MonadIO m, MonadError TypograffitiError m) =>
     Atlas -> [(GlyphInfo, GlyphPos)] -> m Quads
 stringTris atlas = foldM (makeCharQuad atlas) (0, 0, [])
 stringTris' :: (MonadIO m, MonadError TypograffitiError m) =>
-    Atlas -> [(GlyphInfo, GlyphPos)] -> m [(V2 Float, V2 Float)]
+    Atlas -> [(GlyphInfo, GlyphPos)] -> m (Vector (V2 Float, V2 Float))
 stringTris' atlas glyphs = do
     (_, _, ret) <- stringTris atlas glyphs
-    return ret
+    return $ UV.concat $ reverse ret
