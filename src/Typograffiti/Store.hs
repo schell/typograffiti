@@ -31,11 +31,12 @@ import           Data.Text.Glyphize     (defaultBuffer, Buffer(..), shape,
                                         GlyphInfo(..), GlyphPos(..))
 import qualified Data.Text.Glyphize     as HB
 import           Data.Text.Lazy         (Text, pack)
+import qualified Data.Text.Lazy         as Txt
 import           FreeType.Core.Base
 
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
-import           Typograffiti.Text      (GlyphSize(..), drawLinesWrapper)
+import           Typograffiti.Text      (GlyphSize(..), drawLinesWrapper, SampleText(..))
 
 data FontStore n = FontStore {
     fontMap :: TMVar (Map (FilePath, GlyphSize, Int) Font),
@@ -48,14 +49,20 @@ data Font = Font {
     atlases :: TMVar [(IS.IntSet, Atlas)]
   }
 
-makeDrawTextIndentedCached store filepath index fontsize features sampletext indent = do
+makeDrawTextCached :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
+    MonadIO n, MonadFail n, MonadError TypograffitiError n) =>
+    FontStore n -> FilePath -> Int -> GlyphSize -> SampleText ->
+    m (String -> [HB.Feature] -> n (AllocatedRendering [TextTransform]))
+makeDrawTextCached store filepath index fontsize SampleText {..} = do
     s <- liftIO $ atomically $ readTMVar $ fontMap store
     font <- case M.lookup (filepath, fontsize, index) s of
         Nothing -> allocFont store filepath index fontsize
         Just font -> return font
 
     let glyphs = map (codepoint . fst) $
-            shape (harfbuzz font) defaultBuffer { text = sampletext } features
+            shape (harfbuzz font) defaultBuffer {
+                text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
+            } sampleFeatures
     let glyphset = IS.fromList $ map fromEnum glyphs
 
     a <- liftIO $ atomically $ readTMVar $ atlases font
@@ -63,10 +70,11 @@ makeDrawTextIndentedCached store filepath index fontsize features sampletext ind
         (atlas:_) -> return atlas
         _ -> allocAtlas' (atlases font) (freetype font) glyphset
 
-    return $ drawLinesWrapper indent $ \string -> drawGlyphs store atlas $
-        shape (harfbuzz font) defaultBuffer { text = pack string } features
+    return $ drawLinesWrapper tabwidth $ \string features -> drawGlyphs store atlas $
+        shape (harfbuzz font) defaultBuffer { text = pack string } []
 
-allocFont FontStore {..} filepath index fontsize = do
+allocFont :: (MonadIO m) => FontStore n -> FilePath -> Int -> GlyphSize -> m Font
+allocFont FontStore {..} filepath index fontsize = liftIO $ do
     font <- ft_New_Face lib filepath $ toEnum index
     case fontsize of
         PixelSize w h -> ft_Set_Pixel_Sizes font (toEnum $ x2 w) (toEnum $ x2 h)
@@ -80,7 +88,7 @@ allocFont FontStore {..} filepath index fontsize = do
     atlases <- liftIO $ atomically $ newTMVar []
     let ret = Font font' font atlases
 
-    liftIO $ atomically $ do
+    atomically $ do
         map <- takeTMVar fontMap
         putTMVar fontMap $ M.insert (filepath, fontsize, index) ret map
     return ret
@@ -109,8 +117,3 @@ newFontStore lib = do
     store <- liftIO $ atomically $ newTMVar M.empty
 
     return $ FontStore store drawGlyphs lib
-
-makeDrawTextCached a b c d e f = makeDrawTextIndentedCached a b c d e f 4
-makeDrawAsciiIndentedCached a b c d e f =
-    makeDrawTextIndentedCached a b c d e (pack $ map toEnum [32..126]) f
-makeDrawAsciiCached a b c d e = makeDrawTextCached a b c d e $ pack $ map toEnum [32..126]

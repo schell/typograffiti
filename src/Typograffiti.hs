@@ -12,10 +12,8 @@ module Typograffiti(
     makeDrawGlyphs, AllocatedRendering(..), Layout(..),
     SpatialTransform(..), TextTransform(..), move, scale, rotate, color, alpha,
     withFontStore, newFontStore, FontStore(..), Font(..),
-    makeDrawTextIndentedCached, makeDrawTextCached,
-        makeDrawAsciiIndentedCached, makeDrawAsciiCached,
-    makeDrawTextIndented, makeDrawTextIndented', makeDrawText, makeDrawText',
-        makeDrawAsciiIndented, makeDrawAsciiIndented', makeDrawAscii, makeDrawAscii'
+    SampleText (..), defaultSample, addSampleFeature,
+    makeDrawTextCached, makeDrawText
 ) where
 
 import Typograffiti.Atlas
