@@ -23,6 +23,7 @@ import           Graphics.GL.Core32
 import           Graphics.GL.Types
 import           Linear
 import           Linear.V               (Finite, Size, dim, toV)
+import           Data.List              (foldl')
 
 
 allocAndActivateTex :: (MonadIO m, MonadFail m) => GLenum -> m GLuint
@@ -354,10 +355,9 @@ orthoProjection (V2 ww wh) =
   in ortho 0 hw hh 0 0 1
 
 
-boundingBox :: (Unbox a, Real a, Fractional a) => UV.Vector (V2 a) -> (V2 a, V2 a)
-boundingBox vs
-  | UV.null vs = (0,0)
-  | otherwise = UV.foldl' f (br,tl) vs
+boundingBox :: (Unbox a, Real a, Fractional a) => [V2 a] -> (V2 a, V2 a)
+boundingBox [] = (0, 0)
+boundingBox vs = foldl' f (br,tl) vs
   where mn a = min a . realToFrac
         mx a = max a . realToFrac
         f (a, b) c = (mn <$> a <*> c, mx <$> b <*> c)

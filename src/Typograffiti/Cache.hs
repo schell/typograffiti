@@ -18,6 +18,7 @@ module Typograffiti.Cache where
 import           Control.Monad          (foldM)
 import           Control.Monad.Except   (MonadError (..), liftEither,
                                          runExceptT)
+import           Control.Monad.Fail     (MonadFail (..))
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Bifunctor         (first)
 import           Data.ByteString        (ByteString)
@@ -30,13 +31,16 @@ import qualified Data.Vector.Unboxed    as UV
 import           Foreign.Marshal.Array
 import           Graphics.GL
 import           Linear
+import           Data.Text.Glyphize     (GlyphInfo(..), GlyphPos(..))
 
 import           Typograffiti.Atlas
 import           Typograffiti.GL
-import           Typograffiti.Glyph
 
-data AllocatedRendering = AllocatedRendering
-  { arDraw    :: [TextTransform] -> V2 CInt -> IO ()
+class Layout t where
+  translate :: t -> V2 Float -> t
+
+data AllocatedRendering t = AllocatedRendering
+  { arDraw    :: t -> V2 Int -> IO ()
     -- ^ Draw the text with some transformation in some monad.
   , arRelease :: IO ()
     -- ^ Release the allocated draw function in some monad.
@@ -44,6 +48,17 @@ data AllocatedRendering = AllocatedRendering
     -- ^ The size (in pixels) of the drawn text.
   }
 
+makeDrawGlyphs
+  :: ( MonadIO m
+     , MonadError TypograffitiError m
+     , MonadIO n
+     , MonadFail n
+     , MonadError TypograffitiError n
+     )
+  => m (Atlas
+        -> [(GlyphInfo, GlyphPos)]
+        -> n (AllocatedRendering [TextTransform])
+       )
 makeDrawGlyphs = do
     let position = 0
         uv = 1
@@ -181,7 +196,6 @@ alpha =
 
 instance Layout [TextTransform] where
   translate ts (V2 x y) = ts ++ [move x y]
-
 
 liftGL
   :: ( MonadIO m

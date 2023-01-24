@@ -14,6 +14,7 @@ module Typograffiti.Atlas where
 
 import           Control.Monad
 import           Control.Monad.Except                              (MonadError (..))
+import           Control.Monad.Fail                                (MonadFail (..))
 import           Control.Monad.IO.Class
 import           Data.Maybe                                        (fromMaybe)
 import           Data.IntMap                                       (IntMap)
@@ -23,14 +24,31 @@ import qualified Data.Vector.Unboxed                               as UV
 import           Foreign.Marshal.Utils                             (with)
 import           Graphics.GL.Core32
 import           Graphics.GL.Types
+import           FreeType.Core.Base
 import           FreeType.Core.Types                               as BM
 import           FreeType.Support.Bitmap                           as BM
 import           FreeType.Support.Bitmap.Internal                  as BM
 import           Linear
+import           Data.Int                                          (Int32)
+import           Data.Text.Glyphize                                (GlyphInfo(..), GlyphPos(..))
+import           Data.Word                                         (Word32)
+
+import           Foreign.Storable                                  (Storable(..))
+import           Foreign.Ptr                                       (castPtr)
+import           Foreign.Marshal.Array                             (allocaArray, peekArray)
+import           Foreign.C.String                                  (withCString)
 
 import           Typograffiti.GL
-import           Typograffiti.Glyph
-import           Typograffiti.Utils
+
+data TypograffitiError =
+    TypograffitiErrorNoGlyphMetricsForChar Char
+  -- ^ The are no glyph metrics for this character. This probably means
+  -- the character has not been loaded into the atlas.
+  | TypograffitiErrorFreetype String String
+  -- ^ There was a problem while interacting with the freetype2 library.
+  | TypograffitiErrorGL String
+  -- ^ There was a problem while interacting with OpenGL.
+  deriving (Show, Eq)
 
 ------
 --- Atlas
@@ -49,6 +67,7 @@ data Atlas = Atlas {
     atlasFilePath :: FilePath
 } deriving (Show)
 
+emptyAtlas :: GLuint -> Atlas
 emptyAtlas t = Atlas t 0 mempty ""
 
 data AtlasMeasure = AM {
@@ -64,12 +83,15 @@ emptyAM = AM 0 (V2 1 1) 0 mempty
 spacing :: Int
 spacing = 1
 
-glyphRetriever font glyph = do
-    ft_Load_Glyph font (fromIntegral $ fromEnum glyph) FT.FT_LOAD_RENDER
+type GlyphRetriever m = Word32 -> m (FT_Bitmap, FT_Glyph_Metrics)
+glyphRetriever :: MonadIO m => FT_Face -> GlyphRetriever m
+glyphRetriever font glyph = liftIO $ do
+    ft_Load_Glyph font (fromIntegral $ fromEnum glyph) FT_LOAD_RENDER
     font' <- peek font
     slot <- peek $ frGlyph font'
     return (gsrBitmap slot, gsrMetrics slot)
 
+measure :: MonadIO m => GlyphRetriever m -> Int -> AtlasMeasure -> Word32 -> m AtlasMeasure
 measure cb maxw am@AM{..} glyph
     | Just _ <- IM.lookup (fromEnum glyph) amMap = return am
     | otherwise = do
@@ -92,13 +114,14 @@ measure cb maxw am@AM{..} glyph
               }
         return am
 
+texturize :: MonadIO m => GlyphRetriever m -> IntMap (V2 Int) -> Atlas -> Word32 -> m Atlas
 texturize cb xymap atlas@Atlas{..} glyph
     | Just pos@(V2 x y) <- IM.lookup (fromIntegral $ fromEnum glyph) xymap = do
         (bmp, metrics) <- cb glyph
-        glTexSubImage2D GL.GL_TEXTURE_2D 0
+        glTexSubImage2D GL_TEXTURE_2D 0
             (fromIntegral x) (fromIntegral y)
             (fromIntegral $ bWidth bmp) (fromIntegral $ bRows bmp)
-            GL.GL_RED GL.GL_UNSIGNED_BYTE
+            GL_RED GL_UNSIGNED_BYTE
             (castPtr $ bBuffer bmp)
         let vecwh = fromIntegral <$> V2 (bWidth bmp) (bRows bmp)
             canon = floor . (* 0.5) . (* 0.015625) . realToFrac . fromIntegral
@@ -113,40 +136,38 @@ texturize cb xymap atlas@Atlas{..} glyph
               }
         return atlas { atlasMetrics = IM.insert (fromEnum glyph) mtrcs atlasMetrics }
     | otherwise = do
-        putStrLn ("Cound not find glyph " ++ show glyph)
+        liftIO $ putStrLn ("Cound not find glyph " ++ show glyph)
         return atlas
 
-allocAtlas :: (Int32 -> IO (FT_Bitmap, FT_Glyph_Metrics)) -> [Int32] -> IO Atlas
+allocAtlas :: (MonadIO m, MonadFail m) => GlyphRetriever m -> [Word32] -> m Atlas
 allocAtlas cb glyphs = do
     AM {..} <- foldM (measure cb 512) emptyAM glyphs
     let V2 w h = amWH
         xymap = amMap
 
-    [t] <- allocaArray 1 $ \ptr -> do
-        glGenTextures 1 ptr
-        peekArray 1 ptr
-    glActiveTexture 0
-    glBindTexture GL.GL_TEXTURE_2D t
+    t <- allocAndActivateTex 0
 
-    glPixelStorei GL.GL_UNPACK_ALIGNMENT 1
-    withCString (replicate (w * h) $ toEnum 0) $
-        glTexImage2D GL.GL_TEXTURE_2D 0 GL.GL_RED (fromIntegral w) (fromIntegral h)
-                    0 GL.GL_RED GL.GL_UNSIGNED_BYTE . castPtr
+    glPixelStorei GL_UNPACK_ALIGNMENT 1
+    liftIO $ withCString (replicate (w * h) $ toEnum 0) $
+        glTexImage2D GL_TEXTURE_2D 0 GL_RED (fromIntegral w) (fromIntegral h)
+                    0 GL_RED GL_UNSIGNED_BYTE . castPtr
     atlas <- foldM (texturize cb xymap) (emptyAtlas t) glyphs
 
-    glGenerateMipmap GL.GL_TEXTURE_2D
-    glTexParameteri GL.GL_TEXTURE_2D GL.GL_TEXTURE_WRAP_S GL.GL_REPEAT
-    glTexParameteri GL.GL_TEXTURE_2D GL.GL_TEXTURE_WRAP_T GL.GL_REPEAT
-    glTexParameteri GL.GL_TEXTURE_2D GL.GL_TEXTURE_MAG_FILTER GL.GL_LINEAR
-    glTexParameteri GL.GL_TEXTURE_2D GL.GL_TEXTURE_MIN_FILTER GL.GL_LINEAR
-    glBindTexture GL.GL_TEXTURE_2D 0
-    glPixelStorei GL.GL_UNPACK_ALIGNMENT 4
+    glGenerateMipmap GL_TEXTURE_2D
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_S GL_REPEAT
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_WRAP_T GL_REPEAT
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAG_FILTER GL_LINEAR
+    glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
+    glBindTexture GL_TEXTURE_2D 0
+    glPixelStorei GL_UNPACK_ALIGNMENT 4
     return atlas { atlasTextureSize = V2 w h }
 
-freeAtlas a = with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
+freeAtlas :: MonadIO m => Atlas -> m ()
+freeAtlas a = liftIO $ with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
 
 type Quads = (Float, Float, [(V2 Float, V2 Float)])
-makeCharQuad :: Atlas -> Quads -> (GlyphInfo, GlyphPos) -> IO Quads
+makeCharQuad :: (MonadIO m, MonadError TypograffitiError m) =>
+    Atlas -> Quads -> (GlyphInfo, GlyphPos) -> m Quads
 makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphPos {..}) = do
     let iglyph = fromEnum glyph
     case IM.lookup iglyph atlasMetrics of
@@ -172,9 +193,11 @@ makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphP
     f' :: Int -> Float
     f' = fromIntegral
 
-stringTris :: Atlas -> [(GlyphInfo, GlyphPos)] -> IO Quads
+stringTris :: (MonadIO m, MonadError TypograffitiError m) =>
+    Atlas -> [(GlyphInfo, GlyphPos)] -> m Quads
 stringTris atlas = foldM (makeCharQuad atlas) (0, 0, [])
-stringTris' :: Atlas -> [(GlyphInfo, GlyphPos)] -> IO [(V2 Float, V2 Float)]
+stringTris' :: (MonadIO m, MonadError TypograffitiError m) =>
+    Atlas -> [(GlyphInfo, GlyphPos)] -> m [(V2 Float, V2 Float)]
 stringTris' atlas glyphs = do
     (_, _, ret) <- stringTris atlas glyphs
     return ret
