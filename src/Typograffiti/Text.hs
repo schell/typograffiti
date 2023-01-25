@@ -4,6 +4,7 @@
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE OverloadedStrings          #-}
 -- |
 -- Module:     Typograffiti.Monad
 -- Copyright:  (c) 2018 Schell Scivally
@@ -33,9 +34,11 @@ import qualified Data.Text.Glyphize     as HB
 import           FreeType.Core.Base
 import           Data.Text.Lazy         (Text, pack)
 import qualified Data.Text.Lazy         as Txt
+import           Data.Word              (Word32)
 
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
+import           Typograffiti.Rich      (RichText(..))
 
 data GlyphSize = CharSize Float Float Int Int
                | PixelSize Int Int
@@ -46,7 +49,10 @@ data SampleText = SampleText {
     sampleText :: Text,
     tabwidth :: Int
 }
+
+defaultSample :: SampleText
 defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4
+addSampleFeature :: String -> Word32 -> SampleText -> SampleText
 addSampleFeature name value sample@SampleText {..} = sample {
         sampleFeatures =
             HB.Feature (HB.tag_from_string name) value (n*i) (n*succ i) : sampleFeatures
@@ -60,7 +66,7 @@ addSampleFeature name value sample@SampleText {..} = sample {
 makeDrawText :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     MonadIO n, MonadFail n, MonadError TypograffitiError n) =>
     FT_Library -> FilePath -> Int -> GlyphSize -> SampleText ->
-    m (String -> [HB.Feature] -> n (AllocatedRendering [TextTransform]))
+    m (RichText -> n (AllocatedRendering [TextTransform]))
 makeDrawText lib filepath index fontsize SampleText {..} = do
     font <- liftIO $ ft_New_Face lib filepath $ toEnum index
     liftIO $ case fontsize of
@@ -73,26 +79,27 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
     let font' = HB.createFont $ HB.createFace bytes $ toEnum index
     let glyphs = map (codepoint . fst) $
             shape font' defaultBuffer {
-                text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
+                HB.text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
             } sampleFeatures
     let glyphs' = map toEnum $ IS.toList $ IS.fromList $ map fromEnum glyphs
     atlas <- allocAtlas (glyphRetriever font) glyphs'
     liftIO $ ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
-    return $ drawLinesWrapper tabwidth $ \string features ->
-        drawGlyphs atlas $ shape font' defaultBuffer { text = pack string } features
+    return $ drawLinesWrapper tabwidth $ \RichText {..} ->
+        drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
   where x2 = (*2)
 
 makeDrawText' a b c d =
     ft_With_FreeType $ \ft -> runExceptT $ makeDrawText ft a b c d
 
 drawLinesWrapper :: (MonadIO m, MonadFail m) =>
-    Int -> (String -> [HB.Feature] -> m (AllocatedRendering [TextTransform])) ->
-    String -> [HB.Feature] -> m (AllocatedRendering [TextTransform])
-drawLinesWrapper indent cb string features = do
-    let features' = splitFeatures 0 features $ lines string
-    renderers <- mapM (uncurry cb) $ flip zip features' $ map processLine $ lines string
+    Int -> (RichText -> m (AllocatedRendering [TextTransform])) ->
+    RichText -> m (AllocatedRendering [TextTransform])
+drawLinesWrapper indent cb RichText {..} = do
+    let features' = splitFeatures 0 features $ Txt.lines text
+    let cb' (a, b) = cb $ RichText a b
+    renderers <- mapM cb' $ flip zip features' $ map processLine $ Txt.lines text
     let drawLine ts wsz y renderer = do
             arDraw renderer (move 0 y:ts) wsz
             let V2 _ height = arSize renderer
@@ -111,9 +118,10 @@ drawLinesWrapper indent cb string features = do
             arSize = size
           }
   where
+    splitFeatures :: Word -> [HB.Feature] -> [Text] -> [[HB.Feature]]
     splitFeatures _ [] _ = []
     splitFeatures _ _ [] = []
-    splitFeatures offset features' (line:lines') = let n = length line
+    splitFeatures offset features' (line:lines') = let n = fromEnum $ Txt.length line
         in [feat {
                 HB.featStart = max 0 (start - offset),
                 HB.featEnd = min (toEnum n) (end - offset)
@@ -122,10 +130,13 @@ drawLinesWrapper indent cb string features = do
             fromEnum end <= n + fromEnum offset && end >= offset] :
             splitFeatures (offset + toEnum n) features' lines'
 
+    processLine :: Text -> Text
     processLine "" = " " -- enforce nonempty
     processLine cs = expandTabs 0 cs
     -- monospace tabshaping, good enough outside full line-layout.
-    expandTabs n cs = case break (== '\t') cs of
-        (pre, '\t':cs') -> let spaces = indent - ((length pre + n) `rem` indent)
-            in pre ++ replicate spaces ' ' ++ expandTabs (n + length pre + spaces) cs'
-        (tail, _) -> tail
+    expandTabs n cs = case Txt.break (== '\t') cs of
+        (tail, "") -> tail
+        (pre, cs') ->
+            let spaces = indent - ((fromEnum (Txt.length pre) + fromEnum n) `rem` indent)
+            in Txt.concat [pre, Txt.replicate (toEnum spaces) " ",
+                expandTabs (n + Txt.length pre + toEnum spaces) $ Txt.tail cs']

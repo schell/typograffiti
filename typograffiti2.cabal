@@ -32,6 +32,7 @@ library
       Typograffiti.GL
       Typograffiti.Store
       Typograffiti.Text
+      Typograffiti.Rich
   build-depends:       base >=4.12 && <4.13, linear>=1.20, containers >= 0.6,
                         freetype2 >= 0.2, gl >= 0.8, mtl >= 2.2, stm >= 2.5, text,
                         vector >= 0.12, harfbuzz-pure >= 0.0.7, bytestring >= 0.10

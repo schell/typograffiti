@@ -37,6 +37,7 @@ import           FreeType.Core.Base
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
 import           Typograffiti.Text      (GlyphSize(..), drawLinesWrapper, SampleText(..))
+import           Typograffiti.Rich      (RichText(..))
 
 data FontStore n = FontStore {
     fontMap :: TMVar (Map (FilePath, GlyphSize, Int) Font),
@@ -52,7 +53,7 @@ data Font = Font {
 makeDrawTextCached :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     MonadIO n, MonadFail n, MonadError TypograffitiError n) =>
     FontStore n -> FilePath -> Int -> GlyphSize -> SampleText ->
-    m (String -> [HB.Feature] -> n (AllocatedRendering [TextTransform]))
+    m (RichText -> n (AllocatedRendering [TextTransform]))
 makeDrawTextCached store filepath index fontsize SampleText {..} = do
     s <- liftIO $ atomically $ readTMVar $ fontMap store
     font <- case M.lookup (filepath, fontsize, index) s of
@@ -61,7 +62,7 @@ makeDrawTextCached store filepath index fontsize SampleText {..} = do
 
     let glyphs = map (codepoint . fst) $
             shape (harfbuzz font) defaultBuffer {
-                text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
+                HB.text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
             } sampleFeatures
     let glyphset = IS.fromList $ map fromEnum glyphs
 
@@ -70,8 +71,8 @@ makeDrawTextCached store filepath index fontsize SampleText {..} = do
         (atlas:_) -> return atlas
         _ -> allocAtlas' (atlases font) (freetype font) glyphset
 
-    return $ drawLinesWrapper tabwidth $ \string features -> drawGlyphs store atlas $
-        shape (harfbuzz font) defaultBuffer { text = pack string } []
+    return $ drawLinesWrapper tabwidth $ \RichText {..} -> drawGlyphs store atlas $
+        shape (harfbuzz font) defaultBuffer { HB.text = text } []
 
 allocFont :: (MonadIO m) => FontStore n -> FilePath -> Int -> GlyphSize -> m Font
 allocFont FontStore {..} filepath index fontsize = liftIO $ do
