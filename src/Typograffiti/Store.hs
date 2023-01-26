@@ -33,6 +33,8 @@ import qualified Data.Text.Glyphize     as HB
 import           Data.Text.Lazy         (Text, pack)
 import qualified Data.Text.Lazy         as Txt
 import           FreeType.Core.Base
+import           FreeType.Core.Types    (FT_Fixed)
+import           FreeType.Format.Multiple (ft_Set_Var_Design_Coordinates)
 
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
@@ -57,7 +59,7 @@ makeDrawTextCached :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
 makeDrawTextCached store filepath index fontsize SampleText {..} = do
     s <- liftIO $ atomically $ readTMVar $ fontMap store
     font <- case M.lookup (filepath, fontsize, index) s of
-        Nothing -> allocFont store filepath index fontsize
+        Nothing -> allocFont store filepath index fontsize fontOptions
         Just font -> return font
 
     let glyphs = map (codepoint . fst) $
@@ -74,8 +76,9 @@ makeDrawTextCached store filepath index fontsize SampleText {..} = do
     return $ drawLinesWrapper tabwidth $ \RichText {..} -> drawGlyphs store atlas $
         shape (harfbuzz font) defaultBuffer { HB.text = text } []
 
-allocFont :: (MonadIO m) => FontStore n -> FilePath -> Int -> GlyphSize -> m Font
-allocFont FontStore {..} filepath index fontsize = liftIO $ do
+allocFont :: (MonadIO m) =>
+        FontStore n -> FilePath -> Int -> GlyphSize -> HB.FontOptions -> m Font
+allocFont FontStore {..} filepath index fontsize options = liftIO $ do
     font <- ft_New_Face lib filepath $ toEnum index
     case fontsize of
         PixelSize w h -> ft_Set_Pixel_Sizes font (toEnum $ x2 w) (toEnum $ x2 h)
@@ -84,7 +87,8 @@ allocFont FontStore {..} filepath index fontsize = liftIO $ do
                                                     (toEnum dpix) (toEnum dpiy)
 
     bytes <- B.readFile filepath
-    let font' = HB.createFont $ HB.createFace bytes $ toEnum index
+    let font' = HB.createFontWithOptions options $ HB.createFace bytes $ toEnum index
+    liftIO $ ft_Set_Var_Design_Coordinates font $ map float2fixed $ HB.fontVarCoordsDesign font'
 
     atlases <- liftIO $ atomically $ newTMVar []
     let ret = Font font' font atlases
@@ -93,7 +97,10 @@ allocFont FontStore {..} filepath index fontsize = liftIO $ do
         map <- takeTMVar fontMap
         putTMVar fontMap $ M.insert (filepath, fontsize, index) ret map
     return ret
-  where x2 = (*2)
+  where
+    x2 = (*2)
+    float2fixed :: Float -> FT_Fixed
+    float2fixed = toEnum . fromEnum . (*65536)
 
 allocAtlas' :: (MonadIO m, MonadFail m) =>
     TMVar [(IS.IntSet, Atlas)] -> FT_Face -> IS.IntSet -> m Atlas

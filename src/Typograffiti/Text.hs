@@ -29,9 +29,13 @@ import qualified Data.Set               as S
 import qualified Data.IntSet            as IS
 import           Linear
 import qualified Data.ByteString        as B
-import           Data.Text.Glyphize     (defaultBuffer, Buffer(..), shape, GlyphInfo(..))
+import           Data.Text.Glyphize     (defaultBuffer, Buffer(..), shape, GlyphInfo(..),
+                                        parseFeature, parseVariation, Variation(..),
+                                        FontOptions(..), defaultFontOptions)
 import qualified Data.Text.Glyphize     as HB
 import           FreeType.Core.Base
+import           FreeType.Core.Types    (FT_Fixed)
+import           FreeType.Format.Multiple (ft_Set_Var_Design_Coordinates)
 import           Data.Text.Lazy         (Text, pack)
 import qualified Data.Text.Lazy         as Txt
 import           Data.Word              (Word32)
@@ -47,11 +51,12 @@ data GlyphSize = CharSize Float Float Int Int
 data SampleText = SampleText {
     sampleFeatures :: [HB.Feature],
     sampleText :: Text,
-    tabwidth :: Int
+    tabwidth :: Int,
+    fontOptions :: FontOptions
 }
 
 defaultSample :: SampleText
-defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4
+defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4 defaultFontOptions
 addSampleFeature :: String -> Word32 -> SampleText -> SampleText
 addSampleFeature name value sample@SampleText {..} = sample {
         sampleFeatures =
@@ -62,6 +67,35 @@ addSampleFeature name value sample@SampleText {..} = sample {
     i = w $ length sampleFeatures
     w :: Int -> Word
     w = toEnum
+parseSampleFeature :: String -> SampleText -> SampleText
+parseSampleFeature syntax sample | Just feat <- parseFeature syntax = sample {
+        sampleFeatures = feat : sampleFeatures sample
+    }
+  | otherwise = sample
+parseSampleFeatures :: [String] -> SampleText -> SampleText
+parseSampleFeatures = flip $ foldl $ flip parseSampleFeature
+addFontVariant :: String -> Float -> SampleText -> SampleText
+addFontVariant name val sampleText = sampleText {
+    fontOptions = (fontOptions sampleText) {
+        optionVariations = Variation (HB.tag_from_string name) val :
+            optionVariations (fontOptions sampleText)
+    }
+  }
+parseFontVariant :: String -> SampleText -> SampleText
+parseFontVariant syntax sample | Just var <- parseVariation syntax = sample {
+        fontOptions = (fontOptions sample) {
+            optionVariations = var : optionVariations (fontOptions sample)
+        }
+    }
+  | otherwise = sample
+parseFontVariants :: [String] -> SampleText -> SampleText
+parseFontVariants = flip $ foldl $ flip parseFontVariant
+
+varItalic = "ital"
+varOptSize = "opsz"
+varSlant = "slnt"
+varWidth = "wdth"
+varWeight = "wght"
 
 makeDrawText :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     MonadIO n, MonadFail n, MonadError TypograffitiError n) =>
@@ -76,19 +110,24 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
                                                     (toEnum dpix) (toEnum dpiy)
 
     bytes <- liftIO $ B.readFile filepath
-    let font' = HB.createFont $ HB.createFace bytes $ toEnum index
+    let font' = HB.createFontWithOptions fontOptions $ HB.createFace bytes $ toEnum index
     let glyphs = map (codepoint . fst) $
             shape font' defaultBuffer {
                 HB.text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
             } sampleFeatures
     let glyphs' = map toEnum $ IS.toList $ IS.fromList $ map fromEnum glyphs
+    -- FIXME expose this function...
+    liftIO $ ft_Set_Var_Design_Coordinates font $ map float2fixed $ HB.fontVarCoordsDesign font'
     atlas <- allocAtlas (glyphRetriever font) glyphs'
     liftIO $ ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
     return $ drawLinesWrapper tabwidth $ \RichText {..} ->
         drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
-  where x2 = (*2)
+  where
+    x2 = (*2)
+    float2fixed :: Float -> FT_Fixed
+    float2fixed = toEnum . fromEnum . (*65536)
 
 makeDrawText' a b c d =
     ft_With_FreeType $ \ft -> runExceptT $ makeDrawText ft a b c d
