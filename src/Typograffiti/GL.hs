@@ -25,7 +25,7 @@ import           Linear
 import           Linear.V               (Finite, Size, dim, toV)
 import           Data.List              (foldl')
 
-
+-- | Allocates a new active texture (image data) in the GPU.
 allocAndActivateTex :: (MonadIO m, MonadFail m) => GLenum -> m GLuint
 allocAndActivateTex u = do
   [t] <- liftIO $ allocaArray 1 $ \ptr -> do
@@ -35,7 +35,7 @@ allocAndActivateTex u = do
   glBindTexture GL_TEXTURE_2D t
   return t
 
-
+-- | Report any exceptions encounted by OpenGL.
 clearErrors :: MonadIO m => String -> m ()
 clearErrors str = do
   err' <- glGetError
@@ -43,7 +43,7 @@ clearErrors str = do
     liftIO $ putStrLn $ unwords [str, show err']
     assert False $ return ()
 
-
+-- | Allocates a new, bound Vertex Array Object.
 newBoundVAO :: (MonadIO m, MonadFail m) => m GLuint
 newBoundVAO = do
   [vao] <- liftIO $ allocaArray 1 $ \ptr -> do
@@ -53,7 +53,8 @@ newBoundVAO = do
   return vao
 
 
-
+-- | Runs the given callback giving a new temporarily-bound Vertex Array Object,
+-- catching any errors.
 withVAO :: MonadIO m => (GLuint -> IO b) -> m b
 withVAO f = liftIO $ do
   vao <- newBoundVAO
@@ -62,7 +63,7 @@ withVAO f = liftIO $ do
   glBindVertexArray 0
   return r
 
-
+-- | Allocates a new buffer on the GPU.
 newBuffer
   :: MonadIO m
   => m GLuint
@@ -72,7 +73,7 @@ newBuffer = liftIO $ do
     peekArray 1 ptr
   return b
 
-
+-- Allocates the given number of buffer objects to pass to the given callback.
 withBuffers :: MonadIO m => Int -> ([GLuint] -> m b) -> m b
 withBuffers n = (replicateM n newBuffer >>=)
 
@@ -107,7 +108,7 @@ bufferGeometry loc buf as
     glVertexAttribPointer loc n GL_FLOAT GL_FALSE 0 nullPtr
     clearErrors "bufferGeometry"
 
-
+-- | Converts an unboxed vector to a storable vector suitable for storing in a GPU buffer.
 convertVec
   :: (Unbox (f Float), Foldable f) => UV.Vector (f Float) -> SV.Vector GLfloat
 convertVec =
@@ -125,6 +126,8 @@ withBoundTextures ts f = do
   where bindTex tex u = glActiveTexture u >> glBindTexture GL_TEXTURE_2D tex
 
 
+-- | Render the given slice of the given Vertex-Array Object with the given program
+-- in the given mode, with exception handling.
 drawVAO
   :: MonadIO m
   => GLuint
@@ -143,7 +146,7 @@ drawVAO program vao mode num = liftIO $ do
   glDrawArrays mode 0 num
   clearErrors "drawBuffer:glDrawArrays"
 
-
+-- | Compiles GLSL code to GPU opcodes, or returns an error message.
 compileOGLShader
   :: MonadIO m
   => ByteString
@@ -183,7 +186,8 @@ compileOGLShader src shType = do
           return $ Left err
         else return $ Right shader
 
-
+-- Combine multiple compiled GLSL shaders into a single program,
+-- or returns an error message.
 compileOGLProgram
   :: MonadIO m
   => [(String, Integer)]
@@ -227,14 +231,15 @@ compileOGLProgram attribs shaders = do
 -- Uniform marshaling functions
 --------------------------------------------------------------------------------
 
-
+-- | Lookup ID for a named uniform GLSL variable.
 getUniformLocation :: MonadIO m => GLuint -> String -> m GLint
 getUniformLocation program ident = liftIO
   $ withCString ident
   $ glGetUniformLocation program
 
-
+-- | Data that can be uploaded to GLSL uniform variables.
 class UniformValue a where
+  -- | Upload a value to a GLSL uniform variable.
   updateUniform
     :: MonadIO m
     => GLuint
@@ -245,7 +250,7 @@ class UniformValue a where
     -- ^ The value.
     -> m ()
 
-
+-- | Report exceptions setting GLSL uniform variables.
 clearUniformUpdateError :: (MonadIO m, Show a) => GLuint -> GLint -> a -> m ()
 clearUniformUpdateError prog loc val = glGetError >>= \case
   0 -> return ()
@@ -328,15 +333,15 @@ instance UniformValue (Int,Int) where
 -- Matrix helpers
 --------------------------------------------------------------------------------
 
-
+-- | Constructs a matrix that shifts a vector horizontally or vertically.
 mat4Translate :: Num a => V3 a -> M44 a
 mat4Translate = mkTransformationMat identity
 
-
+-- | Constructs a matrix that rotates a vector.
 mat4Rotate :: (Num a, Epsilon a, Floating a) => a -> V3 a -> M44 a
 mat4Rotate phi v = mkTransformation (axisAngle v phi) (V3 0 0 0)
 
-
+-- | Constructs a matrix that resizes a vector.
 mat4Scale :: Num a => V3 a -> M44 a
 mat4Scale (V3 x y z) =
     V4 (V4 x 0 0 0)
@@ -344,7 +349,7 @@ mat4Scale (V3 x y z) =
        (V4 0 0 z 0)
        (V4 0 0 0 1)
 
-
+-- | Constructs a matrix that converts screen coordinates to range 1,-1; with perspective.
 orthoProjection
   :: Integral a
   => V2 a
@@ -354,7 +359,7 @@ orthoProjection (V2 ww wh) =
   let (hw,hh) = (fromIntegral ww, fromIntegral wh)
   in ortho 0 hw hh 0 0 1
 
-
+-- | Computes the boundingbox for an array of points.
 boundingBox :: (Unbox a, Real a, Fractional a) => UV.Vector (V2 a) -> (V2 a, V2 a)
 boundingBox vs
   | UV.null vs = (0,0)

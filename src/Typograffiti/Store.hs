@@ -20,6 +20,7 @@ import           Control.Concurrent.STM (TMVar, atomically, newTMVar, putTMVar,
 import           Control.Monad.Except   (MonadError (..), liftEither, runExceptT, ExceptT (..))
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Control.Monad.Fail     (MonadFail (..))
+import           Control.Monad          (unless)
 import           Data.Map               (Map)
 import qualified Data.Map               as M
 import           Data.Set               (Set)
@@ -41,17 +42,27 @@ import           Typograffiti.Cache
 import           Typograffiti.Text      (GlyphSize(..), drawLinesWrapper, SampleText(..))
 import           Typograffiti.Rich      (RichText(..))
 
+-- | Stored fonts at specific sizes.
 data FontStore n = FontStore {
     fontMap :: TMVar (Map (FilePath, GlyphSize, Int) Font),
+    -- ^ Map for looking up previously-opened fonts & their atlases.
     drawGlyphs :: Atlas -> [(GlyphInfo, GlyphPos)] -> n (AllocatedRendering [TextTransform]),
+    -- ^ Cached routine for compositing from the given atlas.
     lib :: FT_Library
+    -- ^ Globals for FreeType.
   }
+-- | An opened font. In Harfbuzz, FreeType, & Atlas formats.
 data Font = Font {
     harfbuzz :: HB.Font,
+    -- ^ Font as represented by Harfbuzz.
     freetype :: FT_Face,
+    -- ^ Font as represented by FreeType.
     atlases :: TMVar [(IS.IntSet, Atlas)]
+    -- ^ Glyphs from the font rendered into GPU atleses.
   }
 
+-- | Opens a font sized to given value & prepare to render text in it.
+-- The fonts are cached for later reuse.
 makeDrawTextCached :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     MonadIO n, MonadFail n, MonadError TypograffitiError n) =>
     FontStore n -> FilePath -> Int -> GlyphSize -> SampleText ->
@@ -76,6 +87,8 @@ makeDrawTextCached store filepath index fontsize SampleText {..} = do
     return $ drawLinesWrapper tabwidth $ \RichText {..} -> drawGlyphs store atlas $
         shape (harfbuzz font) defaultBuffer { HB.text = text } []
 
+-- | Opens & sizes the given font using both FreeType & Harfbuzz,
+-- loading it into the `FontStore` before returning.
 allocFont :: (MonadIO m) =>
         FontStore n -> FilePath -> Int -> GlyphSize -> HB.FontOptions -> m Font
 allocFont FontStore {..} filepath index fontsize options = liftIO $ do
@@ -88,7 +101,9 @@ allocFont FontStore {..} filepath index fontsize options = liftIO $ do
 
     bytes <- B.readFile filepath
     let font' = HB.createFontWithOptions options $ HB.createFace bytes $ toEnum index
-    liftIO $ ft_Set_Var_Design_Coordinates font $ map float2fixed $ HB.fontVarCoordsDesign font'
+
+    let designCoords = map float2fixed $ HB.fontVarCoordsDesign font'
+    unless (null designCoords) $ liftIO $ ft_Set_Var_Design_Coordinates font designCoords
 
     atlases <- liftIO $ atomically $ newTMVar []
     let ret = Font font' font atlases
@@ -102,6 +117,8 @@ allocFont FontStore {..} filepath index fontsize options = liftIO $ do
     float2fixed :: Float -> FT_Fixed
     float2fixed = toEnum . fromEnum . (*65536)
 
+-- | Allocates a new Atlas for the given font & glyphset,
+-- loading it into the atlas cache before returning.
 allocAtlas' :: (MonadIO m, MonadFail m) =>
     TMVar [(IS.IntSet, Atlas)] -> FT_Face -> IS.IntSet -> m Atlas
 allocAtlas' atlases font glyphset = do
@@ -113,11 +130,14 @@ allocAtlas' atlases font glyphset = do
         putTMVar atlases $ ((glyphset, atlas):a)
     return atlas
 
+-- | Runs the given callback with a new `FontStore`.
+-- Due to FreeType limitations this font store should not persist outside the callback.
 withFontStore :: (MonadIO n, MonadError TypograffitiError n, MonadFail n) =>
     (FontStore n -> ExceptT TypograffitiError IO a) ->
     IO (Either TypograffitiError a)
 withFontStore cb = ft_With_FreeType $ \lib -> runExceptT $ (newFontStore lib >>= cb)
 
+-- | Allocates a new FontStore wrapping given FreeType state.
 newFontStore :: (MonadIO m, MonadError TypograffitiError m,
     MonadIO n, MonadError TypograffitiError n, MonadFail n) => FT_Library -> m (FontStore n)
 newFontStore lib = do

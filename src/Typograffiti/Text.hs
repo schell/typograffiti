@@ -21,7 +21,7 @@ import           Control.Concurrent.STM (TMVar, atomically, newTMVar, putTMVar,
 import           Control.Monad.Except   (MonadError (..), liftEither, runExceptT)
 import           Control.Monad.Fail     (MonadFail (..))
 import           Control.Monad.IO.Class (MonadIO (..))
-import           Control.Monad          (foldM, forM)
+import           Control.Monad          (foldM, forM, unless)
 import           Data.Map               (Map)
 import qualified Data.Map               as M
 import           Data.Set               (Set)
@@ -44,19 +44,34 @@ import           Typograffiti.Atlas
 import           Typograffiti.Cache
 import           Typograffiti.Rich      (RichText(..))
 
+-- | How large the text should be rendered.
 data GlyphSize = CharSize Float Float Int Int
+                -- ^ Size in Pts at given DPI.
                | PixelSize Int Int
+               -- ^ Size in device pixels.
                deriving (Show, Eq, Ord)
 
+-- | Extra parameters for constructing a font atlas,
+-- and determining which glyphs should be in it.
 data SampleText = SampleText {
     sampleFeatures :: [HB.Feature],
+    -- ^ Which OpenType Features you want available to be used in the rendered text.
+    -- Defaults to none.
     sampleText :: Text,
+    -- ^ Indicates which characters & ligatures will be in the text to be rendered.
+    -- Defaults to ASCII, no ligatures.
     tabwidth :: Int,
+    -- ^ How many spaces wide should a tab be rendered?
+    -- Defaults to 4.
     fontOptions :: FontOptions
+    -- ^ Additional font options offered by Harfbuzz.
 }
 
+-- | Constructs a `SampleText` with default values.
 defaultSample :: SampleText
 defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4 defaultFontOptions
+-- | Appends an OpenType feature callers may use to the `Sample` ensuring its
+-- glyphs are available. Call after setting `sampleText`.
 addSampleFeature :: String -> Word32 -> SampleText -> SampleText
 addSampleFeature name value sample@SampleText {..} = sample {
         sampleFeatures =
@@ -67,13 +82,18 @@ addSampleFeature name value sample@SampleText {..} = sample {
     i = w $ length sampleFeatures
     w :: Int -> Word
     w = toEnum
+-- | Parse an OpenType feature into this font using syntax akin to
+-- CSS font-feature-settings.
 parseSampleFeature :: String -> SampleText -> SampleText
 parseSampleFeature syntax sample | Just feat <- parseFeature syntax = sample {
         sampleFeatures = feat : sampleFeatures sample
     }
   | otherwise = sample
+-- | Parse multiple OpenType features into this font.
 parseSampleFeatures :: [String] -> SampleText -> SampleText
 parseSampleFeatures = flip $ foldl $ flip parseSampleFeature
+-- | Alter which OpenType variant of this font will be rendered.
+-- Please check your font which variants are supported.
 addFontVariant :: String -> Float -> SampleText -> SampleText
 addFontVariant name val sampleText = sampleText {
     fontOptions = (fontOptions sampleText) {
@@ -81,6 +101,8 @@ addFontVariant name val sampleText = sampleText {
             optionVariations (fontOptions sampleText)
     }
   }
+-- | Parse a OpenType variant into the configured font using syntax akin to
+-- CSS font-variant-settings.
 parseFontVariant :: String -> SampleText -> SampleText
 parseFontVariant syntax sample | Just var <- parseVariation syntax = sample {
         fontOptions = (fontOptions sample) {
@@ -88,15 +110,23 @@ parseFontVariant syntax sample | Just var <- parseVariation syntax = sample {
         }
     }
   | otherwise = sample
+-- | Parse multiple OpenType variants into this font.
 parseFontVariants :: [String] -> SampleText -> SampleText
 parseFontVariants = flip $ foldl $ flip parseFontVariant
 
+-- | Standard italic font variant. Please check if your font supports this.
 varItalic = "ital"
+-- | Standard optical size font variant. Please check if your font supports this.
 varOptSize = "opsz"
+-- | Standard slant (oblique) font variant. Please check if your font supports this.
 varSlant = "slnt"
+-- | Standard width font variant. Please check if your font supports this.
 varWidth = "wdth"
+-- | Standard weight (boldness) font variant. Please check if your font supports this.
 varWeight = "wght"
 
+-- | Opens a font sized to the given value & prepare to render text in it.
+-- There is no need to keep the given `FT_Library` live before rendering the text.
 makeDrawText :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     MonadIO n, MonadFail n, MonadError TypograffitiError n) =>
     FT_Library -> FilePath -> Int -> GlyphSize -> SampleText ->
@@ -116,22 +146,27 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
                 HB.text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
             } sampleFeatures
     let glyphs' = map toEnum $ IS.toList $ IS.fromList $ map fromEnum glyphs
-    -- FIXME expose this function...
-    liftIO $ ft_Set_Var_Design_Coordinates font $ map float2fixed $ HB.fontVarCoordsDesign font'
+
+    let designCoords = map float2fixed $ HB.fontVarCoordsDesign font'
+    unless (null designCoords) $ liftIO $ ft_Set_Var_Design_Coordinates font designCoords
+
     atlas <- allocAtlas (glyphRetriever font) glyphs'
     liftIO $ ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
-    return $ drawLinesWrapper tabwidth $ \RichText {..} ->
+    -- FIXME get drawLinesWrapper working again!
+    return $ \RichText {..} ->
         drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
   where
     x2 = (*2)
     float2fixed :: Float -> FT_Fixed
     float2fixed = toEnum . fromEnum . (*65536)
 
+-- | Variant of `makeDrawText` which initializes FreeType itself.
 makeDrawText' a b c d =
     ft_With_FreeType $ \ft -> runExceptT $ makeDrawText ft a b c d
 
+-- | Internal utility for rendering multiple lines of text & expanding tabs as configured.
 drawLinesWrapper :: (MonadIO m, MonadFail m) =>
     Int -> (RichText -> m (AllocatedRendering [TextTransform])) ->
     RichText -> m (AllocatedRendering [TextTransform])

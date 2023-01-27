@@ -40,6 +40,7 @@ import           Foreign.C.String                                  (withCString)
 
 import           Typograffiti.GL
 
+-- | Represents a failure to render text.
 data TypograffitiError =
     TypograffitiErrorNoGlyphMetricsForChar Char
   -- ^ The are no glyph metrics for this character. This probably means
@@ -54,36 +55,57 @@ data TypograffitiError =
 --- Atlas
 ------
 
+-- | Size & position of a Glyph in the `Atlas`.
 data GlyphMetrics = GlyphMetrics {
     glyphTexBB :: (V2 Int, V2 Int),
+    -- ^ Bounding box of the glyph in the texture.
     glyphTexSize :: V2 Int,
+    -- ^ Size of the glyph in the texture.
     glyphSize :: V2 Int
+    -- ^ Size of the glyph onscreen.
 } deriving (Show, Eq)
 
+-- | Cache of rendered glyphs to be composited into place on the GPU.
 data Atlas = Atlas {
     atlasTexture :: GLuint,
+    -- ^ The texture holding the pre-rendered glyphs.
     atlasTextureSize :: V2 Int,
+    -- ^ The size of the texture.
     atlasMetrics :: IntMap GlyphMetrics,
+    -- ^ Mapping from glyphs to their position in the texture.
     atlasFilePath :: FilePath
+    -- ^ Filepath for the font.
 } deriving (Show)
 
+-- | Initializes an empty atlas.
 emptyAtlas :: GLuint -> Atlas
 emptyAtlas t = Atlas t 0 mempty ""
 
+-- | Precomputed positioning of glyphs in an `Atlas` texture.
 data AtlasMeasure = AM {
     amWH :: V2 Int,
+    -- ^ Current size of the atlas as it has been laid out so far.
     amXY :: V2 Int,
+    -- ^ Tentative position for the next glyph added to the atlas.
     rowHeight :: Int,
+    -- ^ Height of the current row, for the sake of line wrapping.
     amMap :: IntMap (V2 Int)
+    -- ^ Position of each glyph in the atlas.
 } deriving (Show, Eq)
 
+-- | Initializes a new `AtlasMeasure`.
 emptyAM :: AtlasMeasure
 emptyAM = AM 0 (V2 1 1) 0 mempty
 
+-- | The amount of spacing between glyphs rendered into the atlas's texture.
 spacing :: Int
 spacing = 1
 
+-- | Callback for looking up a glyph from an atlas.
+-- Useful for applying synthetic styles to fonts which lack them,
+-- when calling the low-level APIs.
 type GlyphRetriever m = Word32 -> m (FT_Bitmap, FT_Glyph_Metrics)
+-- | Default callback for glyph lookups, with no modifications.
 glyphRetriever :: MonadIO m => FT_Face -> GlyphRetriever m
 glyphRetriever font glyph = liftIO $ do
     ft_Load_Glyph font (fromIntegral $ fromEnum glyph) FT_LOAD_RENDER
@@ -91,6 +113,8 @@ glyphRetriever font glyph = liftIO $ do
     slot <- peek $ frGlyph font'
     return (gsrBitmap slot, gsrMetrics slot)
 
+-- | Extract the measurements of a character in the FT_Face and append it to
+-- the given AtlasMeasure.
 measure :: MonadIO m => GlyphRetriever m -> Int -> AtlasMeasure -> Word32 -> m AtlasMeasure
 measure cb maxw am@AM{..} glyph
     | Just _ <- IM.lookup (fromEnum glyph) amMap = return am
@@ -114,6 +138,7 @@ measure cb maxw am@AM{..} glyph
               }
         return am
 
+-- | Uploads glyphs into an `Atlas` texture for the GPU to composite.
 texturize :: MonadIO m => GlyphRetriever m -> IntMap (V2 Int) -> Atlas -> Word32 -> m Atlas
 texturize cb xymap atlas@Atlas{..} glyph
     | Just pos@(V2 x y) <- IM.lookup (fromIntegral $ fromEnum glyph) xymap = do
@@ -136,9 +161,14 @@ texturize cb xymap atlas@Atlas{..} glyph
               }
         return atlas { atlasMetrics = IM.insert (fromEnum glyph) mtrcs atlasMetrics }
     | otherwise = do
+        -- TODO Throw an exception.
         liftIO $ putStrLn ("Cound not find glyph " ++ show glyph)
         return atlas
 
+-- | Allocate a new 'Atlas'.
+-- When creating a new 'Atlas' you must pass all the characters that you
+-- might need during the life of the 'Atlas'. Character texturization only
+-- happens once.
 allocAtlas :: (MonadIO m, MonadFail m) => GlyphRetriever m -> [Word32] -> m Atlas
 allocAtlas cb glyphs = do
     AM {..} <- foldM (measure cb 512) emptyAM glyphs
@@ -162,10 +192,13 @@ allocAtlas cb glyphs = do
     glPixelStorei GL_UNPACK_ALIGNMENT 4
     return atlas { atlasTextureSize = V2 w h }
 
+-- | Releases all resources associated with the given 'Atlas'.
 freeAtlas :: MonadIO m => Atlas -> m ()
 freeAtlas a = liftIO $ with (atlasTexture a) $ \ptr -> glDeleteTextures 1 ptr
 
+-- | The geometry needed to render some text, with the position for the next glyph.
 type Quads = (Float, Float, [Vector (V2 Float, V2 Float)])
+-- | Construct the geometry needed to render the given character.
 makeCharQuad :: (MonadIO m, MonadError TypograffitiError m) =>
     Atlas -> Quads -> (GlyphInfo, GlyphPos) -> m Quads
 makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphPos {..}) = do
@@ -193,11 +226,14 @@ makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphP
     f' :: Int -> Float
     f' = fromIntegral
 
+-- | Generate the geometry of the given string, with next-glyph position.
 stringTris :: (MonadIO m, MonadError TypograffitiError m) =>
     Atlas -> [(GlyphInfo, GlyphPos)] -> m Quads
 stringTris atlas = foldM (makeCharQuad atlas) (0, 0, [])
+-- | Generate the geometry of the given string.
 stringTris' :: (MonadIO m, MonadError TypograffitiError m) =>
     Atlas -> [(GlyphInfo, GlyphPos)] -> m (Vector (V2 Float, V2 Float))
 stringTris' atlas glyphs = do
     (_, _, ret) <- stringTris atlas glyphs
+    liftIO $ print ret
     return $ UV.concat $ reverse ret

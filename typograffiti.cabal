@@ -40,9 +40,9 @@ library
   default-language:    Haskell2010
 
 
---executable typograffiti
---  main-is:             Main.hs
---  build-depends:       base >=4.12 && <4.13, typograffiti, sdl2 >= 2.5.4, text, gl
---  hs-source-dirs:      app
---  default-language:    Haskell2010
+executable typograffiti
+  main-is:             Main.hs
+  build-depends:       base >=4.12 && <4.13, typograffiti, sdl2 >= 2.5.4, text, gl, mtl
+  hs-source-dirs:      app
+  default-language:    Haskell2010
 
