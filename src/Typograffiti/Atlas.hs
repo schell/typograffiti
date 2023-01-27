@@ -235,5 +235,4 @@ stringTris' :: (MonadIO m, MonadError TypograffitiError m) =>
     Atlas -> [(GlyphInfo, GlyphPos)] -> m (Vector (V2 Float, V2 Float))
 stringTris' atlas glyphs = do
     (_, _, ret) <- stringTris atlas glyphs
-    liftIO $ print ret
     return $ UV.concat $ reverse ret

@@ -154,8 +154,7 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
     liftIO $ ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
-    -- FIXME get drawLinesWrapper working again!
-    return $ \RichText {..} ->
+    return $ drawLinesWrapper tabwidth $ \RichText {..} ->
         drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
   where
     x2 = (*2)
@@ -171,7 +170,7 @@ drawLinesWrapper :: (MonadIO m, MonadFail m) =>
     Int -> (RichText -> m (AllocatedRendering [TextTransform])) ->
     RichText -> m (AllocatedRendering [TextTransform])
 drawLinesWrapper indent cb RichText {..} = do
-    let features' = splitFeatures 0 features $ Txt.lines text
+    let features' = splitFeatures 0 features (Txt.lines text) ++ repeat []
     let cb' (a, b) = cb $ RichText a b
     renderers <- mapM cb' $ flip zip features' $ map processLine $ Txt.lines text
     let drawLine ts wsz y renderer = do
