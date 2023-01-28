@@ -1,3 +1,12 @@
+-- |
+-- Module:     Typograffiti.Rich
+-- Copyright:  (c) 2023 Adrian Cochrane
+-- License:    MIT
+-- Maintainer: Schell Scivally <schell@takt.com>
+--             & Adrian Cochrane <alcinnz@argonaut-constellation.org>
+--
+-- Abstraction for building richtext strings to be rendered via Typograffiti.
+--
 module Typograffiti.Rich where
 import           Data.Text.Lazy     (Text, append, pack)
 import qualified Data.Text.Lazy as  Txt

@@ -1,11 +1,12 @@
 -- |
 -- Module:     Typograffiti
--- Copyright:  (c) 2018 Schell Scivally
+-- Copyright:  (c) 2018 Schell Scivally, 2023 Adrian Cochrane
 -- License:    MIT
 -- Maintainer: Schell Scivally <schell@takt.com>
+--             & Adrian Cochrane <alcinnz@argonaut-constellation.org>
 --
--- This module provides easy freetype2-based font rendering with a nice
--- Haskell interface.
+-- This module provides easy freetype2 & Harfbuzz based font rendering with a
+-- nice Haskell interface, whilst exposing low-level APIs for those who need it.
 module Typograffiti(
     TypograffitiError(..),
     allocAtlas, freeAtlas, stringTris, Atlas(..), GlyphMetrics(..),

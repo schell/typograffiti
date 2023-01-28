@@ -2,9 +2,10 @@
 {-# LANGUAGE FlexibleInstances          #-}
 -- |
 -- Module:     Typograffiti.Cache
--- Copyright:  (c) 2018 Schell Scivally
+-- Copyright:  (c) 2018 Schell Scivally, 2023 Adrian Cochrane
 -- License:    MIT
 -- Maintainer: Schell Scivally <schell@takt.com>
+--             & Adrian Cochrane <alcinnz@argonaut-constellation.org>
 --
 -- This module provides a method of caching rendererd text, making it suitable
 -- for interactive rendering. You can use the defaultCache or provide your own.

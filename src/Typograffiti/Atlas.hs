@@ -2,9 +2,10 @@
 {-# LANGUAGE RecordWildCards  #-}
 -- |
 -- Module:     Typograffiti.Atlas
--- Copyright:  (c) 2018 Schell Scivally
+-- Copyright:  (c) 2018 Schell Scivally, 2023 Adrian Cochrane
 -- License:    MIT
 -- Maintainer: Schell Scivally <schell@takt.com>
+--             & Adrian Cochrane <alcinnz@argonaut-constellation.org>
 --
 -- This module provides a font-character atlas to use in font rendering with
 -- opengl.

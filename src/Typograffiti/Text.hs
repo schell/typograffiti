@@ -6,6 +6,7 @@
 -- Copyright:  (c) 2018 Schell Scivally
 -- License:    MIT
 -- Maintainer: Schell Scivally <schell@takt.com>
+--             & Adrian Cochrane <alcinnz@argonaut-constellation.org>
 --
 -- Text rendering abstraction, hiding the details of
 -- the Atlas, Cache, and the Harfbuzz library.

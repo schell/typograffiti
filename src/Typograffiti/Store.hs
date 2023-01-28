@@ -7,9 +7,10 @@
 {-# LANGUAGE StandaloneDeriving         #-}
 -- |
 -- Module:     Typograffiti.Monad
--- Copyright:  (c) 2018 Schell Scivally
+-- Copyright:  (c) 2018 Schell Scivally, 2023 Adrian Cochrane
 -- License:    MIT
 -- Maintainer: Schell Scivally <schell@takt.com>
+--             & Adrian Cochrane <alcinnz@argonaut-constellation.org>
 --
 -- A storage context an ops for rendering text with multiple fonts
 -- and sizes, hiding the details of the Atlas, Cache, and the Harfbuzz library.
