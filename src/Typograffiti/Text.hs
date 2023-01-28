@@ -52,14 +52,17 @@ data SampleText = SampleText {
     -- Defaults to ASCII, no ligatures.
     tabwidth :: Int,
     -- ^ How many spaces wide should a tab be rendered?
-    -- Defaults to 4.
-    fontOptions :: FontOptions
+    -- Defaults to 4 spaces.
+    fontOptions :: FontOptions,
     -- ^ Additional font options offered by Harfbuzz.
+    minLineHeight :: Float
+    -- ^ Number of pixels tall each line should be at minimum.
+    -- Defaults to 10px.
 }
 
 -- | Constructs a `SampleText` with default values.
 defaultSample :: SampleText
-defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4 defaultFontOptions
+defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4 defaultFontOptions 10
 -- | Appends an OpenType feature callers may use to the `Sample` ensuring its
 -- glyphs are available. Call after setting `sampleText`.
 addSampleFeature :: String -> Word32 -> SampleText -> SampleText
@@ -145,8 +148,9 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
     liftFreetype $ ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
-    return $ freeAtlasWrapper atlas $ drawLinesWrapper tabwidth $ \RichText {..} ->
-        drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
+    return $ freeAtlasWrapper atlas $ drawLinesWrapper tabwidth minLineHeight
+        $ \RichText {..} ->
+            drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
   where
     x2 = (*2)
     float2fixed :: Float -> FT_Fixed
@@ -158,16 +162,15 @@ makeDrawText' a b c d =
 
 -- | Internal utility for rendering multiple lines of text & expanding tabs as configured.
 type TextRenderer m = RichText -> m (AllocatedRendering [TextTransform])
-drawLinesWrapper :: (MonadIO m, MonadFail m) => Int -> TextRenderer m -> TextRenderer m
-drawLinesWrapper indent cb RichText {..} = do
+drawLinesWrapper :: (MonadIO m, MonadFail m) => Int -> Float -> TextRenderer m -> TextRenderer m
+drawLinesWrapper indent lineheight cb RichText {..} = do
     let features' = splitFeatures 0 features (Txt.lines text) ++ repeat []
     let cb' (a, b) = cb $ RichText a b
-    liftIO $ print $ Txt.lines text
     renderers <- mapM cb' $ flip zip features' $ map processLine $ Txt.lines text
     let drawLine ts wsz y renderer = do
             arDraw renderer (move 0 y:ts) wsz
             let V2 _ height = arSize renderer
-            return (y + toEnum height)
+            return (y + max lineheight (toEnum height))
     let draw ts wsz = do
             foldM (drawLine ts wsz) 0 renderers
             return ()
@@ -195,7 +198,8 @@ drawLinesWrapper indent cb RichText {..} = do
             splitFeatures (offset + toEnum n) features' lines'
 
     processLine :: Text -> Text
-    processLine = expandTabs 0
+    processLine "" = " " -- Prevent Harfbuzz from throwing errors.
+    processLine cs = expandTabs 0 cs
     -- monospace tabshaping, good enough outside full line-layout.
     expandTabs n cs = case Txt.break (== '\t') cs of
         (tail, "") -> tail

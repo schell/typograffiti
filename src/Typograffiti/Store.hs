@@ -87,8 +87,9 @@ makeDrawTextCached store filepath index fontsize SampleText {..} = do
         (atlas:_) -> return atlas
         _ -> allocAtlas' (atlases font) (freetype font) glyphset
 
-    return $ drawLinesWrapper tabwidth $ \RichText {..} -> drawGlyphs store atlas $
-        shape (harfbuzz font) defaultBuffer { HB.text = text } []
+    return $ drawLinesWrapper tabwidth minLineHeight $
+        \RichText {..} -> drawGlyphs store atlas $
+            shape (harfbuzz font) defaultBuffer { HB.text = text } []
 
 -- | Opens & sizes the given font using both FreeType & Harfbuzz,
 -- loading it into the `FontStore` before returning.
