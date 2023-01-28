@@ -3,7 +3,8 @@
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
-{-# LANGUAGE RecordWildCards  #-}
+{-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 -- |
 -- Module:     Typograffiti.Monad
 -- Copyright:  (c) 2018 Schell Scivally
@@ -17,21 +18,17 @@ module Typograffiti.Store where
 
 import           Control.Concurrent.STM (TMVar, atomically, newTMVar, putTMVar,
                                          readTMVar, takeTMVar)
-import           Control.Monad.Except   (MonadError (..), liftEither, runExceptT, ExceptT (..))
+import           Control.Monad.Except   (MonadError (..), runExceptT, ExceptT (..))
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Control.Monad.Fail     (MonadFail (..))
 import           Control.Monad          (unless)
 import           Data.Map               (Map)
 import qualified Data.Map               as M
-import           Data.Set               (Set)
-import qualified Data.Set               as S
 import qualified Data.IntSet            as IS
-import           Linear
 import qualified Data.ByteString        as B
 import           Data.Text.Glyphize     (defaultBuffer, Buffer(..), shape,
-                                        GlyphInfo(..), GlyphPos(..))
+                                        GlyphInfo(..), GlyphPos(..), FontOptions)
 import qualified Data.Text.Glyphize     as HB
-import           Data.Text.Lazy         (Text, pack)
 import qualified Data.Text.Lazy         as Txt
 import           FreeType.Core.Base
 import           FreeType.Core.Types    (FT_Fixed)
@@ -42,9 +39,15 @@ import           Typograffiti.Cache
 import           Typograffiti.Text      (GlyphSize(..), drawLinesWrapper, SampleText(..))
 import           Typograffiti.Rich      (RichText(..))
 
+-- Since HarfBuzz language bindings neglected to declare these itself.
+deriving instance Eq HB.Variation
+deriving instance Ord HB.Variation
+deriving instance Eq FontOptions
+deriving instance Ord FontOptions
+
 -- | Stored fonts at specific sizes.
 data FontStore n = FontStore {
-    fontMap :: TMVar (Map (FilePath, GlyphSize, Int) Font),
+    fontMap :: TMVar (Map (FilePath, GlyphSize, Int, FontOptions) Font),
     -- ^ Map for looking up previously-opened fonts & their atlases.
     drawGlyphs :: Atlas -> [(GlyphInfo, GlyphPos)] -> n (AllocatedRendering [TextTransform]),
     -- ^ Cached routine for compositing from the given atlas.
@@ -69,7 +72,7 @@ makeDrawTextCached :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     m (RichText -> n (AllocatedRendering [TextTransform]))
 makeDrawTextCached store filepath index fontsize SampleText {..} = do
     s <- liftIO $ atomically $ readTMVar $ fontMap store
-    font <- case M.lookup (filepath, fontsize, index) s of
+    font <- case M.lookup (filepath, fontsize, index, fontOptions) s of
         Nothing -> allocFont store filepath index fontsize fontOptions
         Just font -> return font
 
@@ -89,9 +92,9 @@ makeDrawTextCached store filepath index fontsize SampleText {..} = do
 
 -- | Opens & sizes the given font using both FreeType & Harfbuzz,
 -- loading it into the `FontStore` before returning.
-allocFont :: (MonadIO m) =>
+allocFont :: (MonadIO m, MonadError TypograffitiError m) =>
         FontStore n -> FilePath -> Int -> GlyphSize -> HB.FontOptions -> m Font
-allocFont FontStore {..} filepath index fontsize options = liftIO $ do
+allocFont FontStore {..} filepath index fontsize options = liftFreetype $ do
     font <- ft_New_Face lib filepath $ toEnum index
     case fontsize of
         PixelSize w h -> ft_Set_Pixel_Sizes font (toEnum $ x2 w) (toEnum $ x2 h)
@@ -110,7 +113,7 @@ allocFont FontStore {..} filepath index fontsize options = liftIO $ do
 
     atomically $ do
         map <- takeTMVar fontMap
-        putTMVar fontMap $ M.insert (filepath, fontsize, index) ret map
+        putTMVar fontMap $ M.insert (filepath, fontsize, index, options) ret map
     return ret
   where
     x2 = (*2)
@@ -119,7 +122,7 @@ allocFont FontStore {..} filepath index fontsize options = liftIO $ do
 
 -- | Allocates a new Atlas for the given font & glyphset,
 -- loading it into the atlas cache before returning.
-allocAtlas' :: (MonadIO m, MonadFail m) =>
+allocAtlas' :: (MonadIO m, MonadFail m, MonadError TypograffitiError m) =>
     TMVar [(IS.IntSet, Atlas)] -> FT_Face -> IS.IntSet -> m Atlas
 allocAtlas' atlases font glyphset = do
     let glyphs = map toEnum $ IS.toList glyphset

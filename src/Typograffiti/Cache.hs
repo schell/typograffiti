@@ -1,9 +1,5 @@
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase                 #-}
-{-# LANGUAGE RankNTypes                 #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
 -- |
 -- Module:     Typograffiti.Cache
 -- Copyright:  (c) 2018 Schell Scivally
@@ -15,22 +11,17 @@
 --
 module Typograffiti.Cache where
 
-import           Control.Monad          (foldM)
-import           Control.Monad.Except   (MonadError (..), liftEither,
-                                         runExceptT)
+import           Control.Monad.Except   (MonadError (..), liftEither)
 import           Control.Monad.Fail     (MonadFail (..))
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.Bifunctor         (first)
 import           Data.ByteString        (ByteString)
 import qualified Data.ByteString.Char8  as B8
-import qualified Data.IntMap            as IM
-import           Data.Map               (Map)
-import qualified Data.Map               as M
-import           Data.Maybe             (fromMaybe)
 import qualified Data.Vector.Unboxed    as UV
-import           Foreign.Marshal.Array
+import           Foreign.Marshal.Array  (withArray)
 import           Graphics.GL
-import           Linear
+import           Linear                 (V2 (..), V3 (..), V4 (..), M44 (..),
+                                        (!*!), identity)
 import           Data.Text.Glyphize     (GlyphInfo(..), GlyphPos(..))
 
 import           Typograffiti.Atlas
@@ -155,6 +146,10 @@ data SpatialTransform = SpatialTransformTranslate (V2 Float)
                       -- ^ Resize the text.
                       | SpatialTransformRotate Float
                       -- ^ Enlarge the text.
+                      | SpatialTransformSkew Float
+                      -- ^ Skew the text, approximating italics (or rather obliques).
+                      | SpatialTransform (M44 Float)
+                      -- ^ Apply an arbitrary matrix transform to the text.
 
 -- | Modify the rendered text.
 data TextTransform = TextTransformMultiply (V4 Float)
@@ -175,6 +170,9 @@ transformToUniforms = foldl toUniform (identity, 1.0)
                   mv !*! mat4Scale (V3 x y 1)
                 SpatialTransformRotate r ->
                   mv !*! mat4Rotate r (V3 0 0 1)
+                SpatialTransformSkew x ->
+                  mv !*! mat4SkewXbyY x
+                SpatialTransform mat -> mv !*! mat
           in (mv1, clr)
 
 -- | Shift the text horizontally or vertically.
@@ -196,6 +194,12 @@ rotate :: Float -> TextTransform
 rotate =
   TextTransformSpatial
   . SpatialTransformRotate
+
+skew :: Float -> TextTransform
+skew = TextTransformSpatial . SpatialTransformSkew
+
+matrix :: M44 Float -> TextTransform
+matrix = TextTransformSpatial . SpatialTransform
 
 -- | Recolour the text.
 color :: Float -> Float -> Float -> Float -> TextTransform

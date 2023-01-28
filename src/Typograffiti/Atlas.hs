@@ -1,6 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards  #-}
-{-# LANGUAGE TypeApplications #-}
 -- |
 -- Module:     Typograffiti.Atlas
 -- Copyright:  (c) 2018 Schell Scivally
@@ -12,40 +11,38 @@
 --
 module Typograffiti.Atlas where
 
+import           Control.Exception                                 (try)
 import           Control.Monad
 import           Control.Monad.Except                              (MonadError (..))
 import           Control.Monad.Fail                                (MonadFail (..))
 import           Control.Monad.IO.Class
-import           Data.Maybe                                        (fromMaybe)
 import           Data.IntMap                                       (IntMap)
 import qualified Data.IntMap                                       as IM
 import           Data.Vector.Unboxed                               (Vector)
 import qualified Data.Vector.Unboxed                               as UV
 import           Foreign.Marshal.Utils                             (with)
 import           Graphics.GL.Core32
-import           Graphics.GL.Types
+import           Graphics.GL.Types                                 (GLuint)
 import           FreeType.Core.Base
 import           FreeType.Core.Types                               as BM
-import           FreeType.Support.Bitmap                           as BM
-import           FreeType.Support.Bitmap.Internal                  as BM
-import           Linear
+import           FreeType.Exception                                (FtError (..))
+import           Linear                                            (V2 (..))
 import           Data.Int                                          (Int32)
-import           Data.Text.Glyphize                                (GlyphInfo(..), GlyphPos(..))
 import           Data.Word                                         (Word32)
+import           Data.Text.Glyphize                                (GlyphInfo (..), GlyphPos (..))
 
-import           Foreign.Storable                                  (Storable(..))
+import           Foreign.Storable                                  (peek)
 import           Foreign.Ptr                                       (castPtr)
-import           Foreign.Marshal.Array                             (allocaArray, peekArray)
 import           Foreign.C.String                                  (withCString)
 
 import           Typograffiti.GL
 
 -- | Represents a failure to render text.
 data TypograffitiError =
-    TypograffitiErrorNoGlyphMetricsForChar Char
+    TypograffitiErrorNoMetricsForGlyph Int
   -- ^ The are no glyph metrics for this character. This probably means
   -- the character has not been loaded into the atlas.
-  | TypograffitiErrorFreetype String String
+  | TypograffitiErrorFreetype String Int32
   -- ^ There was a problem while interacting with the freetype2 library.
   | TypograffitiErrorGL String
   -- ^ There was a problem while interacting with OpenGL.
@@ -59,8 +56,6 @@ data TypograffitiError =
 data GlyphMetrics = GlyphMetrics {
     glyphTexBB :: (V2 Int, V2 Int),
     -- ^ Bounding box of the glyph in the texture.
-    glyphTexSize :: V2 Int,
-    -- ^ Size of the glyph in the texture.
     glyphSize :: V2 Int
     -- ^ Size of the glyph onscreen.
 } deriving (Show, Eq)
@@ -71,15 +66,13 @@ data Atlas = Atlas {
     -- ^ The texture holding the pre-rendered glyphs.
     atlasTextureSize :: V2 Int,
     -- ^ The size of the texture.
-    atlasMetrics :: IntMap GlyphMetrics,
+    atlasMetrics :: IntMap GlyphMetrics
     -- ^ Mapping from glyphs to their position in the texture.
-    atlasFilePath :: FilePath
-    -- ^ Filepath for the font.
 } deriving (Show)
 
 -- | Initializes an empty atlas.
 emptyAtlas :: GLuint -> Atlas
-emptyAtlas t = Atlas t 0 mempty ""
+emptyAtlas t = Atlas t 0 mempty
 
 -- | Precomputed positioning of glyphs in an `Atlas` texture.
 data AtlasMeasure = AM {
@@ -106,16 +99,17 @@ spacing = 1
 -- when calling the low-level APIs.
 type GlyphRetriever m = Word32 -> m (FT_Bitmap, FT_Glyph_Metrics)
 -- | Default callback for glyph lookups, with no modifications.
-glyphRetriever :: MonadIO m => FT_Face -> GlyphRetriever m
-glyphRetriever font glyph = liftIO $ do
-    ft_Load_Glyph font (fromIntegral $ fromEnum glyph) FT_LOAD_RENDER
-    font' <- peek font
-    slot <- peek $ frGlyph font'
+glyphRetriever :: (MonadIO m, MonadError TypograffitiError m) => FT_Face -> GlyphRetriever m
+glyphRetriever font glyph = do
+    liftFreetype $ ft_Load_Glyph font (fromIntegral $ fromEnum glyph) FT_LOAD_RENDER
+    font' <- liftIO $ peek font
+    slot <- liftIO $ peek $ frGlyph font'
     return (gsrBitmap slot, gsrMetrics slot)
 
 -- | Extract the measurements of a character in the FT_Face and append it to
 -- the given AtlasMeasure.
-measure :: MonadIO m => GlyphRetriever m -> Int -> AtlasMeasure -> Word32 -> m AtlasMeasure
+measure :: (MonadIO m, MonadError TypograffitiError m) =>
+    GlyphRetriever m -> Int -> AtlasMeasure -> Word32 -> m AtlasMeasure
 measure cb maxw am@AM{..} glyph
     | Just _ <- IM.lookup (fromEnum glyph) amMap = return am
     | otherwise = do
@@ -139,7 +133,8 @@ measure cb maxw am@AM{..} glyph
         return am
 
 -- | Uploads glyphs into an `Atlas` texture for the GPU to composite.
-texturize :: MonadIO m => GlyphRetriever m -> IntMap (V2 Int) -> Atlas -> Word32 -> m Atlas
+texturize :: (MonadIO m, MonadError TypograffitiError m) =>
+    GlyphRetriever m -> IntMap (V2 Int) -> Atlas -> Word32 -> m Atlas
 texturize cb xymap atlas@Atlas{..} glyph
     | Just pos@(V2 x y) <- IM.lookup (fromIntegral $ fromEnum glyph) xymap = do
         (bmp, metrics) <- cb glyph
@@ -156,7 +151,6 @@ texturize cb xymap atlas@Atlas{..} glyph
             vecad = canon <$> V2 (gmHoriAdvance metrics) (gmVertAdvance metrics)
             mtrcs = GlyphMetrics {
                 glyphTexBB = (pos, pos + vecwh),
-                glyphTexSize = vecwh,
                 glyphSize = vecsz
               }
         return atlas { atlasMetrics = IM.insert (fromEnum glyph) mtrcs atlasMetrics }
@@ -169,7 +163,8 @@ texturize cb xymap atlas@Atlas{..} glyph
 -- When creating a new 'Atlas' you must pass all the characters that you
 -- might need during the life of the 'Atlas'. Character texturization only
 -- happens once.
-allocAtlas :: (MonadIO m, MonadFail m) => GlyphRetriever m -> [Word32] -> m Atlas
+allocAtlas :: (MonadIO m, MonadFail m, MonadError TypograffitiError m) =>
+    GlyphRetriever m -> [Word32] -> m Atlas
 allocAtlas cb glyphs = do
     AM {..} <- foldM (measure cb 512) emptyAM glyphs
     let V2 w h = amWH
@@ -204,7 +199,7 @@ makeCharQuad :: (MonadIO m, MonadError TypograffitiError m) =>
 makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphPos {..}) = do
     let iglyph = fromEnum glyph
     case IM.lookup iglyph atlasMetrics of
-        Nothing -> return (penx, peny, mLast)
+        Nothing -> throwError $ TypograffitiErrorNoMetricsForGlyph iglyph
         Just GlyphMetrics {..} -> do
             let x = penx + f x_offset
                 y = peny + f y_offset
@@ -236,3 +231,11 @@ stringTris' :: (MonadIO m, MonadError TypograffitiError m) =>
 stringTris' atlas glyphs = do
     (_, _, ret) <- stringTris atlas glyphs
     return $ UV.concat $ reverse ret
+
+-- | Internal utility to propagate FreeType errors into Typograffiti errors.
+liftFreetype :: (MonadIO m, MonadError TypograffitiError m) => IO a -> m a
+liftFreetype cb = do
+    err <- liftIO $ try $ cb
+    case err of
+        Left (FtError func code) -> throwError $ TypograffitiErrorFreetype func code
+        Right ret -> return ret

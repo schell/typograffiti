@@ -1,8 +1,4 @@
 {-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE MultiParamTypeClasses      #-}
-{-# LANGUAGE RankNTypes                 #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE OverloadedStrings          #-}
 -- |
@@ -16,22 +12,16 @@
 module Typograffiti.Text where
 
 
-import           Control.Concurrent.STM (TMVar, atomically, newTMVar, putTMVar,
-                                         readTMVar, takeTMVar)
-import           Control.Monad.Except   (MonadError (..), liftEither, runExceptT)
+import           Control.Monad.Except   (MonadError (..), runExceptT)
 import           Control.Monad.Fail     (MonadFail (..))
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Control.Monad          (foldM, forM, unless)
-import           Data.Map               (Map)
-import qualified Data.Map               as M
-import           Data.Set               (Set)
-import qualified Data.Set               as S
 import qualified Data.IntSet            as IS
-import           Linear
+import           Linear                 (V2 (..))
 import qualified Data.ByteString        as B
-import           Data.Text.Glyphize     (defaultBuffer, Buffer(..), shape, GlyphInfo(..),
-                                        parseFeature, parseVariation, Variation(..),
-                                        FontOptions(..), defaultFontOptions)
+import           Data.Text.Glyphize     (defaultBuffer, shape, GlyphInfo (..),
+                                        parseFeature, parseVariation, Variation (..),
+                                        FontOptions (..), defaultFontOptions)
 import qualified Data.Text.Glyphize     as HB
 import           FreeType.Core.Base
 import           FreeType.Core.Types    (FT_Fixed)
@@ -132,8 +122,8 @@ makeDrawText :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     FT_Library -> FilePath -> Int -> GlyphSize -> SampleText ->
     m (RichText -> n (AllocatedRendering [TextTransform]))
 makeDrawText lib filepath index fontsize SampleText {..} = do
-    font <- liftIO $ ft_New_Face lib filepath $ toEnum index
-    liftIO $ case fontsize of
+    font <- liftFreetype $ ft_New_Face lib filepath $ toEnum index
+    liftFreetype $ case fontsize of
         PixelSize w h -> ft_Set_Pixel_Sizes font (toEnum $ x2 w) (toEnum $ x2 h)
         CharSize w h dpix dpiy -> ft_Set_Char_Size font (floor $ 26.6 * 2 * w)
                                                     (floor $ 26.6 * 2 * h)
@@ -148,13 +138,14 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
     let glyphs' = map toEnum $ IS.toList $ IS.fromList $ map fromEnum glyphs
 
     let designCoords = map float2fixed $ HB.fontVarCoordsDesign font'
-    unless (null designCoords) $ liftIO $ ft_Set_Var_Design_Coordinates font designCoords
+    unless (null designCoords) $
+        liftFreetype $ ft_Set_Var_Design_Coordinates font designCoords
 
     atlas <- allocAtlas (glyphRetriever font) glyphs'
-    liftIO $ ft_Done_Face font
+    liftFreetype $ ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
-    return $ drawLinesWrapper tabwidth $ \RichText {..} ->
+    return $ freeAtlasWrapper atlas $ drawLinesWrapper tabwidth $ \RichText {..} ->
         drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
   where
     x2 = (*2)
@@ -166,12 +157,12 @@ makeDrawText' a b c d =
     ft_With_FreeType $ \ft -> runExceptT $ makeDrawText ft a b c d
 
 -- | Internal utility for rendering multiple lines of text & expanding tabs as configured.
-drawLinesWrapper :: (MonadIO m, MonadFail m) =>
-    Int -> (RichText -> m (AllocatedRendering [TextTransform])) ->
-    RichText -> m (AllocatedRendering [TextTransform])
+type TextRenderer m = RichText -> m (AllocatedRendering [TextTransform])
+drawLinesWrapper :: (MonadIO m, MonadFail m) => Int -> TextRenderer m -> TextRenderer m
 drawLinesWrapper indent cb RichText {..} = do
     let features' = splitFeatures 0 features (Txt.lines text) ++ repeat []
     let cb' (a, b) = cb $ RichText a b
+    liftIO $ print $ Txt.lines text
     renderers <- mapM cb' $ flip zip features' $ map processLine $ Txt.lines text
     let drawLine ts wsz y renderer = do
             arDraw renderer (move 0 y:ts) wsz
@@ -204,8 +195,7 @@ drawLinesWrapper indent cb RichText {..} = do
             splitFeatures (offset + toEnum n) features' lines'
 
     processLine :: Text -> Text
-    processLine "" = " " -- enforce nonempty
-    processLine cs = expandTabs 0 cs
+    processLine = expandTabs 0
     -- monospace tabshaping, good enough outside full line-layout.
     expandTabs n cs = case Txt.break (== '\t') cs of
         (tail, "") -> tail
@@ -213,3 +203,12 @@ drawLinesWrapper indent cb RichText {..} = do
             let spaces = indent - ((fromEnum (Txt.length pre) + fromEnum n) `rem` indent)
             in Txt.concat [pre, Txt.replicate (toEnum spaces) " ",
                 expandTabs (n + Txt.length pre + toEnum spaces) $ Txt.tail cs']
+
+freeAtlasWrapper :: MonadIO m => Atlas -> TextRenderer m -> TextRenderer m
+freeAtlasWrapper atlas cb text = do
+    ret <- cb text
+    return ret {
+        arRelease = do
+            arRelease ret
+            freeAtlas atlas
+    }

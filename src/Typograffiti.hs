@@ -10,7 +10,7 @@ module Typograffiti(
     TypograffitiError(..),
     allocAtlas, freeAtlas, stringTris, Atlas(..), GlyphMetrics(..),
     makeDrawGlyphs, AllocatedRendering(..), Layout(..),
-    SpatialTransform(..), TextTransform(..), move, scale, rotate, color, alpha,
+    SpatialTransform(..), TextTransform(..), move, scale, rotate, skew, color, alpha,
     withFontStore, newFontStore, FontStore(..), Font(..),
     SampleText (..), defaultSample, addSampleFeature, parseSampleFeature, parseSampleFeatures,
         addFontVariant, parseFontVariant, parseFontVariants,

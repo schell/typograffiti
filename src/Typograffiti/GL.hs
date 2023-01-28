@@ -23,7 +23,6 @@ import           Graphics.GL.Core32
 import           Graphics.GL.Types
 import           Linear
 import           Linear.V               (Finite, Size, dim, toV)
-import           Data.List              (foldl')
 
 -- | Allocates a new active texture (image data) in the GPU.
 allocAndActivateTex :: (MonadIO m, MonadFail m) => GLenum -> m GLuint
@@ -347,6 +346,13 @@ mat4Scale (V3 x y z) =
     V4 (V4 x 0 0 0)
        (V4 0 y 0 0)
        (V4 0 0 z 0)
+       (V4 0 0 0 1)
+
+mat4SkewXbyY :: Num a => a -> M44 a
+mat4SkewXbyY a =
+    V4 (V4 1 a 0 0)
+       (V4 0 1 0 0)
+       (V4 0 0 1 0)
        (V4 0 0 0 1)
 
 -- | Constructs a matrix that converts screen coordinates to range 1,-1; with perspective.
