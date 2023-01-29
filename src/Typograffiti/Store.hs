@@ -22,7 +22,7 @@ import           Control.Concurrent.STM (TMVar, atomically, newTMVar, putTMVar,
 import           Control.Monad.Except   (MonadError (..), runExceptT, ExceptT (..))
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Control.Monad.Fail     (MonadFail (..))
-import           Control.Monad          (unless)
+import           Control.Monad          (unless, forM)
 import           Data.Map               (Map)
 import qualified Data.Map               as M
 import qualified Data.IntSet            as IS
@@ -135,12 +135,46 @@ allocAtlas' atlases font glyphset = do
         putTMVar atlases $ ((glyphset, atlas):a)
     return atlas
 
+-- | Frees fonts identified by filepath, index, and\/or fontsize.
+-- Returns the glyphsets covered by their newly-freed atlases in case
+-- callers wish to make an informed reallocation.
+freeFonts :: (MonadIO m, MonadError TypograffitiError m) =>
+    FontStore n -> Maybe FilePath -> Maybe Int -> Maybe GlyphSize -> m IS.IntSet
+freeFonts store filepath index size = do
+    let test (filepath', size', index', _) = case (filepath, index, size) of
+            (Just f, Just i, Just s) -> filepath' == f && index' == i && size' == s
+            (Nothing,Just i, Just s) -> index' == i && size' == s
+            (Just f, Nothing,Just s) -> filepath' == f && size' == s
+            (Nothing,Nothing,Just s) -> size' == s
+            (Just f, Just i, Nothing)-> filepath' == f && index' == i
+            (Nothing,Just i, Nothing)-> index' == i
+            (Just f, Nothing,Nothing)-> filepath' == f
+            (Nothing,Nothing,Nothing)-> True
+    fonts <- liftIO $ atomically $ do
+        fonts <- readTMVar $ fontMap store
+        putTMVar (fontMap store) $ M.filterWithKey (\k _ -> not $ test k) fonts
+        return fonts
+
+    glyphsets <- forM [v | (k, v) <- M.toList fonts, test k] $ \font -> do
+        liftFreetype $ ft_Done_Face $ freetype font
+        -- Harfbuzz font auto-frees.
+        atlases' <- liftIO $ atomically $ readTMVar $ atlases font
+        glyphsets <- forM atlases' $ \(glyphset, atlas) -> do
+            freeAtlas atlas
+            return glyphset
+        return $ IS.unions glyphsets
+    return $ IS.unions glyphsets
+
 -- | Runs the given callback with a new `FontStore`.
 -- Due to FreeType limitations this font store should not persist outside the callback.
 withFontStore :: (MonadIO n, MonadError TypograffitiError n, MonadFail n) =>
     (FontStore n -> ExceptT TypograffitiError IO a) ->
     IO (Either TypograffitiError a)
-withFontStore cb = ft_With_FreeType $ \lib -> runExceptT $ (newFontStore lib >>= cb)
+withFontStore cb = ft_With_FreeType $ \lib -> runExceptT $ do
+    store <- newFontStore lib
+    ret <- cb store
+    freeFonts store Nothing Nothing Nothing
+    return ret
 
 -- | Allocates a new FontStore wrapping given FreeType state.
 newFontStore :: (MonadIO m, MonadError TypograffitiError m,
