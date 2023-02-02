@@ -40,12 +40,6 @@ import           Typograffiti.Cache
 import           Typograffiti.Text      (GlyphSize(..), drawLinesWrapper, SampleText(..))
 import           Typograffiti.Rich      (RichText(..))
 
--- Since HarfBuzz language bindings neglected to declare these itself.
-deriving instance Eq HB.Variation
-deriving instance Ord HB.Variation
-deriving instance Eq FontOptions
-deriving instance Ord FontOptions
-
 -- | Stored fonts at specific sizes.
 data FontStore n = FontStore {
     fontMap :: TMVar (Map (FilePath, GlyphSize, Int, FontOptions) Font),

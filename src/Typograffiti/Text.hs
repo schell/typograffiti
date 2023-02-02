@@ -199,7 +199,6 @@ drawLinesWrapper indent lineheight cb RichText {..} = do
             splitFeatures (offset + toEnum n) features' lines'
 
     processLine :: Text -> Text
-    processLine "" = " " -- Prevent Harfbuzz from throwing errors.
     processLine cs = expandTabs 0 cs
     -- monospace tabshaping, good enough outside full line-layout.
     expandTabs n cs = case Txt.break (== '\t') cs of
