@@ -32,14 +32,14 @@ main = do
     let text = pack $ case args of
           [] -> unlines [
             "Decoder Ring Theatre brings you the continuing adventures",
-            "of Canada's greatest superhero, that scourage of the underworld,",
+            "of Canada's greatest superhero, that scourge of the underworld,",
             "hunter of those who pray upon the innocent,",
             "that marvelous masked mystery man",
             "known only as The Red Panda!",
             "",
             "The Red Panda, masked crucader for justice, hides his secret identity",
             "as one of the city's wealthiest men in his neverending battle",
-            "against crime & corruption. Only his trust driver, Kit Baxter",
+            "against crime & corruption. Only his trusty driver, Kit Baxter",
             "who joins him in the guise of The Flying Squirrel,",
             "knows who wears the mask of The Red Panda!"]
           _ -> unwords args

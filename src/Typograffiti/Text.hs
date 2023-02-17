@@ -25,11 +25,12 @@ import           Data.Text.Glyphize     (defaultBuffer, shape, GlyphInfo (..),
                                         FontOptions (..), defaultFontOptions)
 import qualified Data.Text.Glyphize     as HB
 import           FreeType.Core.Base
-import           FreeType.Core.Types    (FT_Fixed)
+import           FreeType.Core.Types    (FT_Fixed, FT_UShort)
 import           FreeType.Format.Multiple (ft_Set_Var_Design_Coordinates)
 import           Data.Text.Lazy         (Text, pack)
 import qualified Data.Text.Lazy         as Txt
 import           Data.Word              (Word32)
+import           Foreign.Storable       (peek)
 
 import           Typograffiti.Atlas
 import           Typograffiti.Cache
@@ -58,12 +59,12 @@ data SampleText = SampleText {
     -- ^ Additional font options offered by Harfbuzz.
     minLineHeight :: Float
     -- ^ Number of pixels tall each line should be at minimum.
-    -- Defaults to 10px.
+    -- Defaults to 0 indicate to use the font's default lineheight.
 }
 
 -- | Constructs a `SampleText` with default values.
 defaultSample :: SampleText
-defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4 defaultFontOptions 10
+defaultSample = SampleText [] (pack $ map toEnum [32..126]) 4 defaultFontOptions 0
 -- | Appends an OpenType feature callers may use to the `Sample` ensuring its
 -- glyphs are available. Call after setting `sampleText`.
 addSampleFeature :: String -> Word32 -> SampleText -> SampleText
@@ -133,8 +134,17 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
                                                     (floor $ 26.6 * 2 * h)
                                                     (toEnum dpix) (toEnum dpiy)
 
+    font_ <- liftIO $ peek font
+    size <- srMetrics <$> liftIO (peek $ frSize font_)
+    let lineHeight = if minLineHeight == 0 then fixed2float $ smHeight size else minLineHeight
+    let upem = short2float $ frUnits_per_EM font_
+    let scale = (short2float (smX_ppem size)/upem/2, short2float (smY_ppem size)/upem/2)
+
     bytes <- liftIO $ B.readFile filepath
-    let font' = HB.createFontWithOptions fontOptions $ HB.createFace bytes $ toEnum index
+    let fontOpts' = fontOptions {
+            HB.optionScale = Nothing, HB.optionPtEm = Nothing, HB.optionPPEm = Nothing
+      }
+    let font' = HB.createFontWithOptions fontOpts' $ HB.createFace bytes $ toEnum index
     let glyphs = map (codepoint . fst) $
             shape font' defaultBuffer {
                 HB.text = Txt.replicate (toEnum $ succ $ length sampleFeatures) sampleText
@@ -145,17 +155,22 @@ makeDrawText lib filepath index fontsize SampleText {..} = do
     unless (null designCoords) $
         liftFreetype $ ft_Set_Var_Design_Coordinates font designCoords
 
-    atlas <- allocAtlas (glyphRetriever font) glyphs'
+    atlas <- allocAtlas (glyphRetriever font) glyphs' scale
     liftFreetype $ ft_Done_Face font
 
     drawGlyphs <- makeDrawGlyphs
-    return $ freeAtlasWrapper atlas $ drawLinesWrapper tabwidth minLineHeight
+    return $ freeAtlasWrapper atlas $ drawLinesWrapper tabwidth lineHeight
         $ \RichText {..} ->
             drawGlyphs atlas $ shape font' defaultBuffer { HB.text = text } features
   where
     x2 = (*2)
     float2fixed :: Float -> FT_Fixed
-    float2fixed = toEnum . fromEnum . (*65536)
+    float2fixed = toEnum . fromEnum . (*bits16)
+    fixed2float :: FT_Fixed -> Float
+    fixed2float = (/bits16) . toEnum . fromEnum
+    bits16 = 2**16
+    short2float :: FT_UShort -> Float
+    short2float = toEnum . fromEnum
 
 -- | Variant of `makeDrawText` which initializes FreeType itself.
 makeDrawText' a b c d =

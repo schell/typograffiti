@@ -31,8 +31,9 @@ import           Data.Text.Glyphize     (defaultBuffer, Buffer(..), shape,
                                         GlyphInfo(..), GlyphPos(..), FontOptions)
 import qualified Data.Text.Glyphize     as HB
 import qualified Data.Text.Lazy         as Txt
+import           Foreign.Storable       (peek)
 import           FreeType.Core.Base
-import           FreeType.Core.Types    (FT_Fixed)
+import           FreeType.Core.Types    (FT_Fixed, FT_UShort)
 import           FreeType.Format.Multiple (ft_Set_Var_Design_Coordinates)
 
 import           Typograffiti.Atlas
@@ -55,8 +56,12 @@ data Font = Font {
     -- ^ Font as represented by Harfbuzz.
     freetype :: FT_Face,
     -- ^ Font as represented by FreeType.
-    atlases :: TMVar [(IS.IntSet, Atlas)]
+    atlases :: TMVar [(IS.IntSet, Atlas)],
     -- ^ Glyphs from the font rendered into GPU atleses.
+    lineHeight :: Float,
+    -- ^ Default lineheight for this font.
+    fontScale :: (Float, Float)
+    -- ^ Scaling parameters for Harfbuzz layout.
   }
 
 -- | Opens a font sized to given value & prepare to render text in it.
@@ -67,8 +72,11 @@ makeDrawTextCached :: (MonadIO m, MonadFail m, MonadError TypograffitiError m,
     m (RichText -> n (AllocatedRendering [TextTransform]))
 makeDrawTextCached store filepath index fontsize SampleText {..} = do
     s <- liftIO $ atomically $ readTMVar $ fontMap store
-    font <- case M.lookup (filepath, fontsize, index, fontOptions) s of
-        Nothing -> allocFont store filepath index fontsize fontOptions
+    let fontOpts' = fontOptions {
+        HB.optionScale = Nothing, HB.optionPtEm = Nothing, HB.optionPPEm = Nothing
+      }
+    font <- case M.lookup (filepath, fontsize, index, fontOpts') s of
+        Nothing -> allocFont store filepath index fontsize fontOpts'
         Just font -> return font
 
     let glyphs = map (codepoint . fst) $
@@ -80,9 +88,10 @@ makeDrawTextCached store filepath index fontsize SampleText {..} = do
     a <- liftIO $ atomically $ readTMVar $ atlases font
     atlas <- case [a' | (gs, a') <- a, glyphset `IS.isSubsetOf` gs] of
         (atlas:_) -> return atlas
-        _ -> allocAtlas' (atlases font) (freetype font) glyphset
+        _ -> allocAtlas' (atlases font) (freetype font) glyphset (fontScale font)
 
-    return $ drawLinesWrapper tabwidth minLineHeight $
+    let lh = if minLineHeight == 0 then lineHeight font else minLineHeight
+    return $ drawLinesWrapper tabwidth lh $
         \RichText {..} -> drawGlyphs store atlas $
             shape (harfbuzz font) defaultBuffer { HB.text = text } []
 
@@ -104,8 +113,14 @@ allocFont FontStore {..} filepath index fontsize options = liftFreetype $ do
     let designCoords = map float2fixed $ HB.fontVarCoordsDesign font'
     unless (null designCoords) $ liftIO $ ft_Set_Var_Design_Coordinates font designCoords
 
+    font_ <- liftIO $ peek font
+    size <- srMetrics <$> liftIO (peek $ frSize font_)
+    let lineHeight = fixed2float $ smHeight size
+    let upem = short2float $ frUnits_per_EM font_
+    let scale = (short2float (smX_ppem size)/upem/2, short2float (smY_ppem size)/upem/2)
+
     atlases <- liftIO $ atomically $ newTMVar []
-    let ret = Font font' font atlases
+    let ret = Font font' font atlases lineHeight scale
 
     atomically $ do
         map <- takeTMVar fontMap
@@ -114,15 +129,20 @@ allocFont FontStore {..} filepath index fontsize options = liftFreetype $ do
   where
     x2 = (*2)
     float2fixed :: Float -> FT_Fixed
-    float2fixed = toEnum . fromEnum . (*65536)
+    float2fixed = toEnum . fromEnum . (*bits16)
+    fixed2float :: FT_Fixed -> Float
+    fixed2float = (/bits16) . toEnum . fromEnum
+    bits16 = 2**16
+    short2float :: FT_UShort -> Float
+    short2float = toEnum . fromEnum
 
 -- | Allocates a new Atlas for the given font & glyphset,
 -- loading it into the atlas cache before returning.
 allocAtlas' :: (MonadIO m, MonadFail m, MonadError TypograffitiError m) =>
-    TMVar [(IS.IntSet, Atlas)] -> FT_Face -> IS.IntSet -> m Atlas
-allocAtlas' atlases font glyphset = do
+    TMVar [(IS.IntSet, Atlas)] -> FT_Face -> IS.IntSet -> (Float, Float) -> m Atlas
+allocAtlas' atlases font glyphset scale = do
     let glyphs = map toEnum $ IS.toList glyphset
-    atlas <- allocAtlas (glyphRetriever font) glyphs
+    atlas <- allocAtlas (glyphRetriever font) glyphs scale
 
     liftIO $ atomically $ do
         a <- takeTMVar atlases

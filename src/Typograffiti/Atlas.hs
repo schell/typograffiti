@@ -67,13 +67,15 @@ data Atlas = Atlas {
     -- ^ The texture holding the pre-rendered glyphs.
     atlasTextureSize :: V2 Int,
     -- ^ The size of the texture.
-    atlasMetrics :: IntMap GlyphMetrics
+    atlasMetrics :: IntMap GlyphMetrics,
     -- ^ Mapping from glyphs to their position in the texture.
+    atlasScale :: (Float, Float)
+    -- ^ Scaling factor for font-units given by Harfbuzz.
 } deriving (Show)
 
 -- | Initializes an empty atlas.
 emptyAtlas :: GLuint -> Atlas
-emptyAtlas t = Atlas t 0 mempty
+emptyAtlas t = Atlas t 0 mempty (0, 0)
 
 -- | Precomputed positioning of glyphs in an `Atlas` texture.
 data AtlasMeasure = AM {
@@ -165,8 +167,8 @@ texturize cb xymap atlas@Atlas{..} glyph
 -- might need during the life of the 'Atlas'. Character texturization only
 -- happens once.
 allocAtlas :: (MonadIO m, MonadFail m, MonadError TypograffitiError m) =>
-    GlyphRetriever m -> [Word32] -> m Atlas
-allocAtlas cb glyphs = do
+    GlyphRetriever m -> [Word32] -> (Float, Float) -> m Atlas
+allocAtlas cb glyphs scale = do
     AM {..} <- foldM (measure cb 512) emptyAM glyphs
     let V2 w h = amWH
         xymap = amMap
@@ -186,7 +188,7 @@ allocAtlas cb glyphs = do
     glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MIN_FILTER GL_LINEAR
     glBindTexture GL_TEXTURE_2D 0
     glPixelStorei GL_UNPACK_ALIGNMENT 4
-    return atlas { atlasTextureSize = V2 w h }
+    return atlas { atlasTextureSize = V2 w h, atlasScale = scale }
 
 -- | Releases all resources associated with the given 'Atlas'.
 freeAtlas :: MonadIO m => Atlas -> m ()
@@ -202,8 +204,8 @@ makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphP
     case IM.lookup iglyph atlasMetrics of
         Nothing -> throwError $ TypograffitiErrorNoMetricsForGlyph iglyph
         Just GlyphMetrics {..} -> do
-            let x = penx + f x_offset
-                y = peny + f y_offset
+            let x = penx + f x_offset*fst atlasScale
+                y = peny + f y_offset*snd atlasScale
                 V2 w h = f' <$> glyphSize
                 V2 aszW aszH = f' <$> atlasTextureSize
                 V2 texL texT = f' <$> fst glyphTexBB
@@ -214,11 +216,11 @@ makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphP
                 br = (V2 (x+w) y, V2 (texR/aszW) (texB/aszH))
                 bl = (V2 (x) y, V2 (texL/aszW) (texB/aszH))
 
-            return (penx + f x_advance/150, peny + f y_advance/150,
+            return (penx + f x_advance*fst atlasScale, peny + f y_advance*snd atlasScale,
                     UV.fromList [tl, tr, br, tl, br, bl] : mLast)
   where
     f :: Int32 -> Float
-    f = fromIntegral
+    f =  fromIntegral
     f' :: Int -> Float
     f' = fromIntegral
 
