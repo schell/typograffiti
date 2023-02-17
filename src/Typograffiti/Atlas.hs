@@ -57,8 +57,10 @@ data TypograffitiError =
 data GlyphMetrics = GlyphMetrics {
     glyphTexBB :: (V2 Int, V2 Int),
     -- ^ Bounding box of the glyph in the texture.
-    glyphSize :: V2 Int
+    glyphSize :: V2 Int,
     -- ^ Size of the glyph onscreen.
+    glyphOffset :: V2 Int
+    -- ^ Left & top bearings.
 } deriving (Show, Eq)
 
 -- | Cache of rendered glyphs to be composited into place on the GPU.
@@ -150,11 +152,10 @@ texturize cb xymap atlas@Atlas{..} glyph
             canon = floor . (* 0.5) . (* 0.015625) . realToFrac . fromIntegral
             vecsz = canon <$> V2 (gmWidth metrics) (gmHeight metrics)
             vecxb = canon <$> V2 (gmHoriBearingX metrics) (gmHoriBearingY metrics)
-            vecyb = canon <$> V2 (gmVertBearingX metrics) (gmVertBearingY metrics)
-            vecad = canon <$> V2 (gmHoriAdvance metrics) (gmVertAdvance metrics)
             mtrcs = GlyphMetrics {
                 glyphTexBB = (pos, pos + vecwh),
-                glyphSize = vecsz
+                glyphSize = vecsz,
+                glyphOffset = vecxb
               }
         return atlas { atlasMetrics = IM.insert (fromEnum glyph) mtrcs atlasMetrics }
     | otherwise = do
@@ -207,14 +208,16 @@ makeCharQuad Atlas {..} (penx, peny, mLast) (GlyphInfo {codepoint=glyph}, GlyphP
             let x = penx + f x_offset*fst atlasScale
                 y = peny + f y_offset*snd atlasScale
                 V2 w h = f' <$> glyphSize
+                V2 dx dy = f' <$> glyphOffset
+                (x', y') = (x + dx, y - dy)
                 V2 aszW aszH = f' <$> atlasTextureSize
                 V2 texL texT = f' <$> fst glyphTexBB
                 V2 texR texB = f' <$> snd glyphTexBB
 
-                tl = (V2 (x) (y-h), V2 (texL/aszW) (texT/aszH))
-                tr = (V2 (x+w) (y-h), V2 (texR/aszW) (texT/aszH))
-                br = (V2 (x+w) y, V2 (texR/aszW) (texB/aszH))
-                bl = (V2 (x) y, V2 (texL/aszW) (texB/aszH))
+                tl = (V2 (x') (y'), V2 (texL/aszW) (texT/aszH))
+                tr = (V2 (x'+w) (y'), V2 (texR/aszW) (texT/aszH))
+                br = (V2 (x'+w) (y'+h), V2 (texR/aszW) (texB/aszH))
+                bl = (V2 (x') (y'+h), V2 (texL/aszW) (texB/aszH))
 
             return (penx + f x_advance*fst atlasScale, peny + f y_advance*snd atlasScale,
                     UV.fromList [tl, tr, br, tl, br, bl] : mLast)
