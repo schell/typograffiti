@@ -10,8 +10,8 @@ description:    This is a text rendering library that uses OpenGL and freetype2 
 category:       Graphics
 homepage:       https://github.com/schell/typograffiti#readme
 bug-reports:    https://github.com/schell/typograffiti/issues
-author:         Schell Scivally
-maintainer:     schell@takt.com
+author:         Schell Scivally & Adrian Cochrane
+maintainer:     alcinnz@argonaut-constellation.org
 copyright:      2018 Schell Scivally & others
 license:        BSD3
 license-file:   LICENSE
@@ -33,7 +33,7 @@ library
       Typograffiti.Store
       Typograffiti.Text
       Typograffiti.Rich
-  build-depends:       base >=4.12 && <4.13, linear>=1.20, containers >= 0.6,
+  build-depends:       base >=4.12 && <4.16, linear>=1.20, containers >= 0.6,
                         freetype2 >= 0.2, gl >= 0.8, mtl >= 2.2, stm >= 2.5, text,
                         vector >= 0.12, harfbuzz-pure >= 1.0.2, bytestring >= 0.10
   hs-source-dirs:      src
@@ -42,7 +42,8 @@ library
 
 executable typograffiti
   main-is:             Main.hs
-  build-depends:       base >=4.12 && <4.13, typograffiti, sdl2 >= 2.5.4, text, gl, mtl
+  build-depends:       base >=4.12 && <4.16, typograffiti, sdl2 >= 2.5.4, text, gl, mtl
   hs-source-dirs:      app
   default-language:    Haskell2010
+
 
