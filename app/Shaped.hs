@@ -7,7 +7,7 @@ import Typograffiti (makeDrawGlyphs, allocAtlas, TextTransform(..),
 import Typograffiti.Atlas (glyphRetriever)
 import Control.Monad.Except (liftEither, runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
-import SDL hiding (rotate)
+import SDL hiding (rotate, trace)
 import Graphics.GL.Core32
 
 import Data.Function (fix)
@@ -18,6 +18,7 @@ import qualified Data.IntSet as IS
 import Data.Int (Int32)
 import Data.Text.Glyphize (GlyphInfo(..), GlyphPos(..))
 import FreeType.Core.Base (ft_With_FreeType, ft_With_Face)
+import Debug.Trace (trace)
 
 main :: IO ()
 main = do
@@ -39,7 +40,8 @@ main = do
                 | (ppemX, ',':ppemY) <- break (== ',') ppem ->
                     (fontfile, read ppemX, read ppemY, infile)
                 | otherwise -> (fontfile, read ppem, read ppem, infile)
-            _ -> (ttfName, 15, 15, "shaped.txt")
+            _ -> trace "USAGE: draw-shaped FONTFILE PPEM FILE"
+                (ttfName, 15, 15, "shaped.txt")
     text <- read <$> readFile infile :: IO [(Int32,Int32,[(GlyphInfo,GlyphPos)])]
     let glyphs = IS.fromList [fromIntegral $ codepoint info
             | (_, _, glyphs) <- text, (info, _) <- glyphs]
