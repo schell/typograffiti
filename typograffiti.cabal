@@ -33,7 +33,7 @@ library
       Typograffiti.Store
       Typograffiti.Text
       Typograffiti.Rich
-  build-depends:       base >=4.12 && <4.16, linear>=1.20, containers >= 0.6,
+  build-depends:       base >=4.12 && <5, linear>=1.20, containers >= 0.6,
                         freetype2 >= 0.2, gl >= 0.8, mtl >= 2.2, stm >= 2.5, text,
                         vector >= 0.12, harfbuzz-pure >= 1.0.2, bytestring >= 0.10
   hs-source-dirs:      src
@@ -42,7 +42,13 @@ library
 
 executable typograffiti
   main-is:             Main.hs
-  build-depends:       base >=4.12 && <4.16, typograffiti, sdl2 >= 2.5.4, text, gl, mtl
+  build-depends:       base >=4.12 && <5, typograffiti, sdl2 >= 2.5.4, text, gl, mtl
   hs-source-dirs:      app
   default-language:    Haskell2010
 
+executable draw-shaped
+  main-is:             Shaped.hs
+  build-depends:       base >=4.12 && <5, typograffiti, sdl2 >= 2.5.4,
+                       text, gl, mtl, containers, harfbuzz-pure, freetype2
+  hs-source-dirs:      app
+  default-language:    Haskell2010
