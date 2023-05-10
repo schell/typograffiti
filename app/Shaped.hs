@@ -17,7 +17,7 @@ import Control.Monad (unless, forM)
 import qualified Data.IntSet as IS
 import Data.Int (Int32)
 import Data.Text.Glyphize (GlyphInfo(..), GlyphPos(..))
-import FreeType.Core.Base (ft_With_FreeType, ft_With_Face)
+import FreeType.Core.Base (ft_With_FreeType, ft_With_Face, ft_Set_Pixel_Sizes)
 import Debug.Trace (trace)
 
 main :: IO ()
@@ -47,8 +47,10 @@ main = do
             | (_, _, glyphs) <- text, (info, _) <- glyphs]
 
     atlas' <- ft_With_FreeType $ \ft -> ft_With_Face ft fontfile 0 $ \font -> do
+        ft_Set_Pixel_Sizes font (floor $ 2 * ppemX) (floor $ 2 * ppemY)
         let font' = glyphRetriever font
-        runExceptT $ allocAtlas font' (map toEnum $ IS.toList glyphs) (ppemX, ppemY)
+        let atlasScale = (1, 1)
+        runExceptT $ allocAtlas font' (map toEnum $ IS.toList glyphs) atlasScale
 
     err <- runExceptT $ do
         drawGlyphs <- makeDrawGlyphs
@@ -65,7 +67,7 @@ main = do
                 sprite <- drawGlyphs atlas para
                 liftIO $ arDraw sprite [
                     TextTransformSpatial $ SpatialTransformTranslate $
-                        fromIntegral <$> V2 x y
+                        fromIntegral <$> V2 x (-y)
                   ] (fromIntegral <$> sz)
 
             liftIO $ glSwapWindow w
